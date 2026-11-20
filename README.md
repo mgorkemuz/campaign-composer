@@ -4,7 +4,7 @@ A marketer describes a campaign in plain language. Claude turns it into a valida
 SMS/email copy. The marketer reviews and approves, and the system sends through a rate-limited queue to a mock
 provider while a dashboard shows delivery status live.
 
-> Status: Phase 0 (infrastructure) done. See [docs/PLAN.md](docs/PLAN.md) for the phases.
+> Status: Phases 0–1 done (infrastructure, mock data). See [docs/PLAN.md](docs/PLAN.md) for the phases.
 
 ## Quick start
 

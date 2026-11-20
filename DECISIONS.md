@@ -41,6 +41,19 @@ What changed in the port, and why:
 - **Embedded Postgres binaries are unpacked once per machine** for tests, in the user cache folder, under a file
   lock. Unpacking took about 60 s per test package under `-race`; now the whole suite runs in seconds.
 
+## Mock data
+
+- **Seed:** 5,000 users from `internal/seed`, deterministic (fixed seed). The server inserts them on start if
+  `users` is empty; `SEED_USERS` changes the count.
+- **Fake by design:** names come from fixed lists. Emails use the reserved `example.*` domains and phones the
+  Turkish mobile format. About 0.5% of phones and emails are malformed on purpose, so the mock provider's
+  permanent-failure path has real cases.
+- **No event-history table, to keep scope small:** each user has `last_cart_at`, `last_purchase_at`,
+  `order_count` and `total_spent`.
+- **Cart ages are skewed towards recent days**, as real activity is. The example brief ("İstanbul, cart in the
+  last 30 days, no purchase") matches 322 users, and a test keeps it in a useful range.
+- **Cities use their Turkish spelling** (`İstanbul`). The segment engine must match "Istanbul" too.
+
 ## Models
 
 `claude-haiku-5-5` is the default: the tasks are short and structured, and manual testing stays at about

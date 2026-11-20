@@ -155,6 +155,24 @@ users.
 3. **Dashboard (live):** progress per channel, counts by status, throughput, retries, and a table of failed
    deliveries with their errors.
 
+**Visual direction.** oriorai's components and tokens on a white background, with thin grid lines and a bold
+sans-serif display font for big headings. One pixel-art accent that carries data rather than decoration:
+
+- **Delivery grid:** one square per delivery, coloured by status, filling in live:
+
+  | Status | Colour |
+  | --- | --- |
+  | queued | light grey |
+  | sending / retrying | yellow |
+  | sent | blue |
+  | delivered | navy |
+  | undelivered / failed | red |
+
+  Hovering a square shows the recipient and the last error.
+- **Small extras:** a pixel logo mark and a pixel "thinking" animation while Claude streams.
+
+Inspired by pixel-grid web design generally; no third-party logos, copy or characters are reused.
+
 ## Testing (`make test`: no API key, no Docker)
 
 | Area | How |

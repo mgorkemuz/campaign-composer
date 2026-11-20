@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +22,8 @@ type Config struct {
 	AnthropicModel  string
 	// LogJSON switches logs to JSON, for log collectors.
 	LogJSON bool
+	// SeedUsers is how many mock users to create when the users table is empty.
+	SeedUsers int
 }
 
 // DefaultModel is cheap and fast enough for short structured tasks.
@@ -30,7 +33,7 @@ const DefaultModel = "claude-haiku-5-5"
 // Anything else in the file is ignored on purpose.
 var keys = []string{
 	"PORT", "DATABASE_URL", "DATA_DIR", "LOG_FORMAT",
-	"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+	"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "SEED_USERS",
 }
 
 // Load reads settings from the process environment. Values from envFile are
@@ -49,7 +52,12 @@ func Load(envFile string) (Config, error) {
 		}
 		return def
 	}
+	seedUsers, err := strconv.Atoi(get("SEED_USERS", "5000"))
+	if err != nil || seedUsers < 0 {
+		return Config{}, fmt.Errorf("SEED_USERS must be a non-negative number")
+	}
 	return Config{
+		SeedUsers:       seedUsers,
 		Port:            get("PORT", "8080"),
 		DatabaseURL:     get("DATABASE_URL", ""),
 		DataDir:         get("DATA_DIR", ".data"),

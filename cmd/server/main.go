@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"campaign-composer/internal/api"
 	"campaign-composer/internal/config"
 	"campaign-composer/internal/events"
+	"campaign-composer/internal/seed"
 	"campaign-composer/internal/store"
 )
 
@@ -42,6 +44,11 @@ func run() error {
 	defer closeDB()
 	if err := store.Migrate(ctx, pool); err != nil {
 		return err
+	}
+	if n, err := seed.Users(ctx, pool, seed.Options{N: cfg.SeedUsers, Seed: 42, Now: time.Now()}); err != nil {
+		return fmt.Errorf("seed users: %w", err)
+	} else if n > 0 {
+		log.Info("seeded mock users", "count", n)
 	}
 
 	// Background work stops when bgCtx is cancelled, after HTTP has shut down.
