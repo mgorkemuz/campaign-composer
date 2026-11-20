@@ -54,6 +54,26 @@ What changed in the port, and why:
   last 30 days, no purchase") matches 322 users, and a test keeps it in a useful range.
 - **Cities use their Turkish spelling** (`İstanbul`). The segment engine must match "Istanbul" too.
 
+## Segment rules
+
+- **One field catalog drives everything** (`internal/segment/fields.go`): the JSON schema Claude must follow,
+  validation, the SQL column for each field, and the UI's field list (`GET /api/segments/fields`). The schema
+  is generated from the catalog, so they cannot drift apart.
+- **No text from a rule ever reaches SQL.** Columns and operators come from the catalog, and values are always
+  `$n` parameters. Text values must be one of the catalog's known values, so an injection attempt fails as
+  "unknown city" before compiling.
+- **At most two levels** ("A and (B or C)"). Structured outputs don't allow recursive schemas, and deeper logic
+  is hard for a marketer to read anyway.
+- **Consent is not a rule field.** It's applied per channel at send time, so no rule can reach users who didn't
+  consent.
+- **Validation lists every problem with its path** (`conditions[1].value: …`), so one round trip to Claude
+  can fix them all.
+- **Strings are not accepted as numbers** (`"30"` is rejected), so mistakes surface instead of being guessed at.
+- **"Within N days" is anchored to one `now`,** so a preview and the send that follows can use the same cut-off.
+- **Tests compare results with hand-written SQL.** They also check that opposite operators split the users
+  exactly (e.g. `within_days 45` + `not_within_days 45` = everyone, which catches a forgotten `NULL`), and
+  that 200 random catalog rules all run.
+
 ## Models
 
 `claude-haiku-5-5` is the default: the tasks are short and structured, and manual testing stays at about

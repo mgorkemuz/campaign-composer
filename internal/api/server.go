@@ -17,6 +17,7 @@ type Server struct {
 	pool *pgxpool.Pool
 	log  *slog.Logger
 	hub  *events.Hub
+	now  func() time.Time
 
 	closing   chan struct{}
 	closeOnce sync.Once
@@ -24,10 +25,15 @@ type Server struct {
 
 type Options struct {
 	Hub *events.Hub
+	// Now is the clock for "within N days" rules; tests pin it. Default time.Now.
+	Now func() time.Time
 }
 
 func New(pool *pgxpool.Pool, log *slog.Logger, opts Options) *Server {
-	return &Server{pool: pool, log: log, hub: opts.Hub, closing: make(chan struct{})}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return &Server{pool: pool, log: log, hub: opts.Hub, now: opts.Now, closing: make(chan struct{})}
 }
 
 // CloseStreams ends open event streams. http.Server.Shutdown waits for active
@@ -44,6 +50,9 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /readyz", s.handleReady)
+
+	mux.HandleFunc("GET /api/segments/fields", s.handleSegmentFields)
+	mux.HandleFunc("POST /api/segments/preview", s.handleSegmentPreview)
 
 	// Unknown /api paths get a JSON 404.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
