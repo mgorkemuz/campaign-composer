@@ -1,0 +1,95 @@
+// Command server runs the Campaign Composer API, the event hub and (later) the
+// delivery workers in one process.
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"campaign-composer/internal/api"
+	"campaign-composer/internal/config"
+	"campaign-composer/internal/events"
+	"campaign-composer/internal/store"
+)
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := config.Load(".env")
+	if err != nil {
+		return err
+	}
+	log := newLogger(cfg.LogJSON)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	pool, closeDB, err := store.Open(ctx, cfg.DatabaseURL, cfg.DataDir, log)
+	if err != nil {
+		return err
+	}
+	defer closeDB()
+	if err := store.Migrate(ctx, pool); err != nil {
+		return err
+	}
+
+	// Background work stops when bgCtx is cancelled, after HTTP has shut down.
+	bgCtx, stopBg := context.WithCancel(context.Background())
+	defer stopBg()
+	hub := events.NewHub(pool, log)
+	go hub.Run(bgCtx)
+
+	apiSrv := api.New(pool, log, api.Options{Hub: hub})
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           apiSrv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	errc := make(chan error, 1)
+	go func() {
+		log.Info("listening", "port", cfg.Port, "llm", llmMode(cfg))
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errc <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case err := <-errc:
+		return err
+	}
+	log.Info("shutting down")
+	apiSrv.CloseStreams()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error("http shutdown", "error", err)
+	}
+	stopBg()
+	return nil
+}
+
+func llmMode(cfg config.Config) string {
+	if cfg.AnthropicAPIKey == "" {
+		return "mock"
+	}
+	return "claude:" + cfg.AnthropicModel
+}
+
+func newLogger(json bool) *slog.Logger {
+	if json {
+		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, nil))
+}

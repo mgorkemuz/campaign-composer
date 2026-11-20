@@ -1,0 +1,22 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+
+# Go
+/bin/
+*.test
+*.out
+coverage.*
+
+# Node / Vue
+node_modules/
+dist/
+*.local
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+.data/

@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: composer
+      POSTGRES_PASSWORD: composer   # local-only dev credential
+      POSTGRES_DB: composer
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U composer -d composer"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  server:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://composer:composer@postgres:5432/composer?sslmode=disable
+      LOG_FORMAT: json
+    ports: ["8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
