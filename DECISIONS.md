@@ -74,10 +74,43 @@ What changed in the port, and why:
   exactly (e.g. `within_days 45` + `not_within_days 45` = everyone, which catches a forgotten `NULL`), and
   that 200 random catalog rules all run.
 
+## LLM integration
+
+- **Official Anthropic Go SDK** behind a small `Provider` interface (ported from my earlier project). Every call
+  streams.
+- **JSON comes from structured outputs** (`output_config.format`), not a forced tool call. Newer models reject
+  forced `tool_choice`, and structured outputs keep the answer's shape fixed.
+- **The backend validates what the schema can't express:** known fields and values, number ranges, and later
+  message lengths.
+- **One retry policy.** The SDK's own retries are off, and ours retries 429/5xx/529 with backoff and jitter,
+  honoring `Retry-After`. Errors after text has streamed are never retried, so an answer is never shown twice.
+- **One repair round.** If the answer fails validation, Claude gets one fresh request with the rejected answer and
+  every problem listed. A second failure is shown to the marketer, who can reword the brief or edit the rule by
+  hand. The rejected answer is quoted in a new user message, not replayed as an assistant turn, which keeps
+  requests valid under newer models' history checks.
+- **Errors map to what the user can do:**
+
+  | Code | Meaning |
+  | --- | --- |
+  | `llm_invalid_output` (422) | The answer was still invalid after the repair round. |
+  | `llm_refused` (422) | The model declined the brief. |
+  | `llm_unavailable` (502) | Temporary: try again. |
+  | `llm_rejected` (502) | Configuration: bad key, missing workspace. |
+
+  A real call found the last one: an organization key needs `ANTHROPIC_WORKSPACE_ID`, and the first version
+  wrongly said "try again".
+- **Without an API key, a keyword-based mock** answers in the same JSON shapes and goes through the same
+  validation, so the app works offline. Tests use a separate scripted fake.
+- **The brief sits in `<brief>` tags,** and the prompt treats it as a description of the campaign, not as
+  instructions.
+
 ## Models
 
-`claude-haiku-5-5` is the default: the tasks are short and structured, and manual testing stays at about
-$0.001 per campaign. `ANTHROPIC_MODEL` switches it. Structured outputs can't express length limits, so the
+`claude-haiku-5-5` is the default: the tasks are short and structured.
+
+**Measured on real calls:** an audience generation takes about 1,850 input and 230–310 output tokens (about
+$0.0003) and 2.5–4 s. It produced the expected rule for the example brief and for a Turkish brief, and refine
+edited the existing rule instead of rebuilding it. `ANTHROPIC_MODEL` switches it. Structured outputs can't express length limits, so the
 backend validates SMS (≤ 160) and subject (≤ 80) itself.
 
 ## AI session exports

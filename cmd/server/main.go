@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"campaign-composer/internal/api"
+	"campaign-composer/internal/campaign"
+	"campaign-composer/internal/composer"
 	"campaign-composer/internal/config"
 	"campaign-composer/internal/events"
+	"campaign-composer/internal/llm"
 	"campaign-composer/internal/seed"
 	"campaign-composer/internal/store"
 )
@@ -57,7 +60,10 @@ func run() error {
 	hub := events.NewHub(pool, log)
 	go hub.Run(bgCtx)
 
-	apiSrv := api.New(pool, log, api.Options{Hub: hub})
+	provider := newLLM(cfg)
+	campaigns := campaign.NewService(pool, composer.New(provider, log), time.Now)
+
+	apiSrv := api.New(pool, log, api.Options{Hub: hub, Campaigns: campaigns})
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           apiSrv.Handler(),
@@ -65,7 +71,7 @@ func run() error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "port", cfg.Port, "llm", llmMode(cfg))
+		log.Info("listening", "port", cfg.Port, "llm", provider.Name())
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
@@ -87,11 +93,15 @@ func run() error {
 	return nil
 }
 
-func llmMode(cfg config.Config) string {
+// newLLM uses Claude when an API key is set, and the keyword mock otherwise, so
+// the app also works offline.
+func newLLM(cfg config.Config) llm.Provider {
 	if cfg.AnthropicAPIKey == "" {
-		return "mock"
+		return &composer.Mock{ChunkDelay: 15 * time.Millisecond}
 	}
-	return "claude:" + cfg.AnthropicModel
+	return llm.NewAnthropic(llm.AnthropicOptions{
+		APIKey: cfg.AnthropicAPIKey, Model: cfg.AnthropicModel, WorkspaceID: cfg.AnthropicWorkspaceID,
+	})
 }
 
 func newLogger(json bool) *slog.Logger {

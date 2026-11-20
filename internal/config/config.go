@@ -20,6 +20,9 @@ type Config struct {
 	// AnthropicAPIKey enables the real Claude provider; empty means the mock LLM.
 	AnthropicAPIKey string
 	AnthropicModel  string
+	// AnthropicWorkspaceID is needed when the API key is not scoped to one
+	// workspace (common on organization accounts).
+	AnthropicWorkspaceID string
 	// LogJSON switches logs to JSON, for log collectors.
 	LogJSON bool
 	// SeedUsers is how many mock users to create when the users table is empty.
@@ -33,7 +36,7 @@ const DefaultModel = "claude-haiku-5-5"
 // Anything else in the file is ignored on purpose.
 var keys = []string{
 	"PORT", "DATABASE_URL", "DATA_DIR", "LOG_FORMAT",
-	"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "SEED_USERS",
+	"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_WORKSPACE_ID", "SEED_USERS",
 }
 
 // Load reads settings from the process environment. Values from envFile are
@@ -57,13 +60,14 @@ func Load(envFile string) (Config, error) {
 		return Config{}, fmt.Errorf("SEED_USERS must be a non-negative number")
 	}
 	return Config{
-		SeedUsers:       seedUsers,
-		Port:            get("PORT", "8080"),
-		DatabaseURL:     get("DATABASE_URL", ""),
-		DataDir:         get("DATA_DIR", ".data"),
-		AnthropicAPIKey: get("ANTHROPIC_API_KEY", ""),
-		AnthropicModel:  get("ANTHROPIC_MODEL", DefaultModel),
-		LogJSON:         get("LOG_FORMAT", "text") == "json",
+		SeedUsers:            seedUsers,
+		Port:                 get("PORT", "8080"),
+		DatabaseURL:          get("DATABASE_URL", ""),
+		DataDir:              get("DATA_DIR", ".data"),
+		AnthropicAPIKey:      get("ANTHROPIC_API_KEY", ""),
+		AnthropicModel:       get("ANTHROPIC_MODEL", DefaultModel),
+		AnthropicWorkspaceID: get("ANTHROPIC_WORKSPACE_ID", ""),
+		LogJSON:              get("LOG_FORMAT", "text") == "json",
 	}, nil
 }
 

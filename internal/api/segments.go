@@ -55,15 +55,5 @@ func writeRuleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_rule", err.Error())
 		return
 	}
-	var body struct {
-		Error struct {
-			Code     string   `json:"code"`
-			Message  string   `json:"message"`
-			Problems []string `json:"problems"`
-		} `json:"error"`
-	}
-	body.Error.Code = "invalid_rule"
-	body.Error.Message = "the audience rule is not valid"
-	body.Error.Problems = ve.Problems
-	writeJSON(w, http.StatusUnprocessableEntity, body)
+	writeProblems(w, http.StatusUnprocessableEntity, "invalid_rule", "the audience rule is not valid", ve.Problems)
 }
