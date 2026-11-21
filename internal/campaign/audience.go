@@ -153,6 +153,11 @@ func (s *Service) saveAudience(ctx context.Context, c Campaign, rule segment.Rul
 		if tag.RowsAffected() == 0 {
 			return ErrWrongStatus
 		}
+		if status == StatusContentReady { // the audience's languages may have changed
+			if err := s.queueTranslations(ctx, tx, c.ID); err != nil {
+				return err
+			}
+		}
 		if _, err := events.Add(ctx, tx, Topic(c.ID), "audience_ready", map[string]any{
 			"total": p.Total, "sms_reachable": p.SMSReachable, "email_reachable": p.EmailReachable,
 			"content_state": contentState,

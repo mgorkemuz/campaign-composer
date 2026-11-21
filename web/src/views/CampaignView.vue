@@ -155,6 +155,6 @@ onBeforeUnmount(() => close?.())
       <StatusBadge :status="campaign!.status" />
       <h1 class="text-2xl font-semibold leading-snug tracking-tight sm:text-3xl">{{ campaign!.brief }}</h1>
     </div>
-    <Dashboard :campaign="campaign!" :progress="progress" @resent="onResent" />
+    <Dashboard :campaign="campaign!" :progress="progress" @resent="onResent" @unscheduled="(c) => (campaign = c)" />
   </div>
 </template>

@@ -1,0 +1,53 @@
+# Runs on every push and pull request: the same checks as `make test`, plus a
+# Docker build. No API key or database service is needed: tests use the mock
+# LLM and an embedded PostgreSQL.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cache embedded PostgreSQL
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.embedded-postgres-go
+            ~/.cache/campaign-composer
+          key: embedded-postgres-17-${{ runner.os }}
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && echo "run gofmt" && exit 1)
+      - run: go test -race ./...
+
+  web:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx vue-tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t campaign-composer:ci .

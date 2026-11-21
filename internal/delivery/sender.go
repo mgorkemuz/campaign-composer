@@ -82,10 +82,13 @@ func (s *Sender) Handle(ctx context.Context, job queue.Job) error {
 	err := s.pool.QueryRow(ctx, `
 		SELECT d.status, d.channel, d.campaign_id::text, d.resend_count,
 		       u.first_name, u.last_name, u.city, u.phone, u.email,
-		       c.sms_body, c.email_subject, c.email_body
+		       coalesce(t.sms, c.sms_body), coalesce(t.email_subject, c.email_subject), coalesce(t.email_body, c.email_body)
 		FROM deliveries d
 		JOIN users u ON u.id = d.user_id
 		JOIN campaigns c ON c.id = d.campaign_id
+		-- The user's language, if its translation of these exact messages is ready.
+		LEFT JOIN campaign_translations t ON t.campaign_id = c.id AND t.language = u.language
+		     AND t.state = 'ready' AND t.version = c.content_version
 		WHERE d.id = $1`, p.DeliveryID).Scan(&status, &channel, &campaignID, &round,
 		&r.FirstName, &r.LastName, &r.City, &phone, &email,
 		&content.SMS, &content.EmailSubject, &content.EmailBody)
@@ -95,6 +98,12 @@ func (s *Sender) Handle(ctx context.Context, job queue.Job) error {
 	switch status {
 	case StatusSent, StatusDelivered, StatusUndelivered, StatusFailed:
 		return nil // already finished: a duplicate job must not send again
+	}
+	// A scheduled campaign starts sending with its first message.
+	if tag, err := s.pool.Exec(ctx, `
+		UPDATE campaigns SET status = 'sending', updated_at = now() WHERE id = $1 AND status = 'scheduled'`,
+		campaignID); err == nil && tag.RowsAffected() == 1 {
+		events.Add(ctx, s.pool, campaignTopic(campaignID), "sending", map[string]string{"status": "sending"})
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE deliveries SET status = 'sending', attempts = attempts + 1, updated_at = now()

@@ -3,6 +3,7 @@ package campaign
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -24,6 +25,12 @@ var consentColumn = map[string]string{"sms": "sms_consent", "email": "email_cons
 // ErrNotReady means the campaign has no valid messages yet.
 var ErrNotReady = errors.New("the campaign needs an audience and valid messages before approval")
 
+// MaxScheduleAhead bounds how far in the future a campaign can be scheduled.
+const MaxScheduleAhead = 30 * 24 * time.Hour
+
+// ErrBadSchedule means the requested send time is too soon or too far ahead.
+var ErrBadSchedule = errors.New("the send time must be at least a minute from now and at most 30 days ahead")
+
 type ApproveResult struct {
 	Campaign Campaign `json:"campaign"`
 	SMS      int      `json:"sms"`
@@ -33,7 +40,17 @@ type ApproveResult struct {
 // Approve freezes the campaign and queues one delivery per consenting
 // recipient and channel. Everything happens in one transaction: the deliveries,
 // their send jobs and the status change commit together or not at all.
-func (s *Service) Approve(ctx context.Context, id string) (ApproveResult, error) {
+//
+// With sendAt set, the campaign is scheduled: the audience is fixed now (the
+// people the marketer reviewed), and the send jobs wait until sendAt.
+func (s *Service) Approve(ctx context.Context, id string, sendAt *time.Time) (ApproveResult, error) {
+	if sendAt != nil {
+		// Real time, not s.now: s.now anchors "within N days" audience rules (and
+		// tests pin it), while the queue runs jobs by the database clock.
+		if lead := time.Until(*sendAt); lead < s.MinScheduleLead || lead > MaxScheduleAhead {
+			return ApproveResult{}, ErrBadSchedule
+		}
+	}
 	var res ApproveResult
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		c, err := scan(tx.QueryRow(ctx, selectCampaign+` WHERE id = $1 FOR UPDATE`, id))
@@ -41,13 +58,21 @@ func (s *Service) Approve(ctx context.Context, id string) (ApproveResult, error)
 			return err
 		}
 		if c.Status != StatusContentReady {
-			if c.Status == StatusSending || c.Status == StatusCompleted || c.Status == StatusApproved {
+			if c.Status == StatusSending || c.Status == StatusCompleted || c.Status == StatusApproved || c.Status == StatusScheduled {
 				return ErrWrongStatus // already approved: approving again does nothing
 			}
 			return ErrNotReady
 		}
 		if c.ContentState != ContentReady || c.Rule == nil || c.Language == nil {
 			return ErrNotReady
+		}
+		var translating bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM campaign_translations
+			WHERE campaign_id = $1 AND state = 'translating')`, id).Scan(&translating); err != nil {
+			return err
+		}
+		if translating {
+			return ErrTranslating
 		}
 
 		// Check the messages once more against the audience as it is now:
@@ -80,10 +105,11 @@ func (s *Service) Approve(ctx context.Context, id string) (ApproveResult, error)
 		// One send job per delivery, keyed by the delivery so it can never be
 		// queued twice.
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jobs (kind, dedup_key, payload, max_attempts)
-			SELECT 'send_' || d.channel, 'delivery:' || d.id, jsonb_build_object('delivery_id', d.id), $2
+			INSERT INTO jobs (kind, dedup_key, payload, max_attempts, run_at)
+			SELECT 'send_' || d.channel, 'delivery:' || d.id, jsonb_build_object('delivery_id', d.id), $2,
+			       coalesce($3::timestamptz, now())
 			FROM deliveries d WHERE d.campaign_id = $1
-			ON CONFLICT (dedup_key) DO NOTHING`, id, s.DeliveryMaxAttempts); err != nil {
+			ON CONFLICT (dedup_key) DO NOTHING`, id, s.DeliveryMaxAttempts, sendAt); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `
@@ -93,13 +119,16 @@ func (s *Service) Approve(ctx context.Context, id string) (ApproveResult, error)
 		}
 
 		status := StatusSending
-		if res.SMS+res.Email == 0 {
+		switch {
+		case res.SMS+res.Email == 0:
 			status = StatusCompleted // nobody to send to
+		case sendAt != nil:
+			status = StatusScheduled
 		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE campaigns SET status = $2, approved_at = now(), updated_at = now(),
+			UPDATE campaigns SET status = $2, approved_at = now(), updated_at = now(), scheduled_at = $3,
 				completed_at = CASE WHEN $2 = 'completed' THEN now() END
-			WHERE id = $1`, id, status); err != nil {
+			WHERE id = $1`, id, status, sendAt); err != nil {
 			return err
 		}
 		for _, ch := range delivery.Channels {
@@ -107,7 +136,7 @@ func (s *Service) Approve(ctx context.Context, id string) (ApproveResult, error)
 				return err
 			}
 		}
-		_, err = events.Add(ctx, tx, Topic(id), "approved", map[string]int{"sms": res.SMS, "email": res.Email})
+		_, err = events.Add(ctx, tx, Topic(id), "approved", map[string]any{"sms": res.SMS, "email": res.Email, "scheduled_at": sendAt})
 		return err
 	})
 	if err != nil {

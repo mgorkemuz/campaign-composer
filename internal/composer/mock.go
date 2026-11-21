@@ -30,7 +30,8 @@ func (m *Mock) Generate(ctx context.Context, req llm.Request, onText func(string
 	case TaskAudience:
 		last := req.Messages[len(req.Messages)-1].Text
 		text = mockAudience(tagged(last, "brief") + "\n" + tagged(last, "instruction"))
-	case TaskContent:
+	case TaskContent, TaskTranslate:
+		// A "translation" is the same kind of message written in the target language.
 		last := req.Messages[len(req.Messages)-1].Text
 		text = mockContent(tagged(last, "brief"), tagged(last, "language"))
 	default:

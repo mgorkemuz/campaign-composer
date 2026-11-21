@@ -44,15 +44,24 @@ Open http://localhost:8080.
 | `PUT /api/campaigns/{id}/audience` | Save a hand-edited rule |
 | `POST /api/campaigns/{id}/content` | Generate messages (streams to `/events`) |
 | `PUT /api/campaigns/{id}/content` | Save hand-edited messages |
-| `POST /api/campaigns/{id}/approve` | Queue one delivery per consenting recipient and channel |
+| `POST /api/campaigns/{id}/approve` | Queue one delivery per consenting recipient and channel; `{"send_at": …}` schedules it |
+| `POST /api/campaigns/{id}/unschedule` | Cancel a scheduled campaign before it starts |
+| `POST /api/campaigns/{id}/resend` | Send again what did not arrive (a new round; invalid contacts skipped) |
 | `GET /api/campaigns/{id}/events` | Server-sent events: status changes, message text as it is written, delivery progress (counts, throughput, pixel-grid data) |
 | `GET /api/campaigns/{id}/deliveries[/counts]` | Delivery list (filter by `status`) and counts |
 | `GET /api/segments/fields`, `POST /api/segments/preview` | Rule fields; preview counts for a rule |
+| `GET /api/deliveries/recent` | Status codes of the latest deliveries (the home page band) |
 | `POST /webhooks/provider` | Signed delivery receipts from the provider |
 
 ## Architecture
 
 To be written in full at the end. See [DECISIONS.md](DECISIONS.md) for the stack and the reasons behind it.
+
+## Bonus features
+
+Done: CI (GitHub Actions), scheduled sending, and each user in their own language (one AI translation per
+language, not per user). A/B variants were left out on purpose: without opens or clicks there is nothing to
+compare. Details in [DECISIONS.md › Bonus features](DECISIONS.md#bonus-features).
 
 ## Not done yet
 

@@ -18,7 +18,8 @@ export interface StreamHandlers {
 }
 
 const storedEvents = [
-  'created', 'audience_ready', 'content_started', 'content_ready', 'content_failed', 'approved', 'completed', 'resend',
+  'created', 'audience_ready', 'content_started', 'content_ready', 'content_failed', 'approved', 'scheduled', 'sending', 'unscheduled', 'completed', 'resend',
+  'translation_ready', 'translation_failed',
 ]
 
 /**

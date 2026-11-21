@@ -22,7 +22,6 @@ import (
 	"campaign-composer/internal/composer"
 	"campaign-composer/internal/delivery"
 	"campaign-composer/internal/events"
-	"campaign-composer/internal/llm/llmtest"
 	"campaign-composer/internal/metrics"
 	"campaign-composer/internal/mockprovider"
 	"campaign-composer/internal/queue"
@@ -37,6 +36,7 @@ type sendingEnv struct {
 	api      *httptest.Server
 	pool     *pgxpool.Pool
 	provider *mockprovider.Provider
+	svc      *campaign.Service
 }
 
 // sendingServer runs the API, send workers and (optionally) the mock provider
@@ -57,12 +57,13 @@ func sendingServerWith(t *testing.T, chaos mockprovider.Config, fake delivery.Pr
 	<-hub.Ready()
 
 	clock := func() time.Time { return fixedNow }
-	svc := campaign.NewService(pool, composer.New(llmtest.New(), quiet), clock)
+	// The keyword mock writes translations, deterministically and offline.
+	svc := campaign.NewService(pool, composer.New(&composer.Mock{}, quiet), clock)
 	svc.DeliveryMaxAttempts = 20 // chaos must never exhaust a message's attempts by bad luck
 	s := New(pool, quiet, Options{Hub: hub, Now: clock, Campaigns: svc, WebhookSecret: webhookSecret})
 	apiSrv := httptest.NewServer(s.Handler())
 
-	env := sendingEnv{api: apiSrv, pool: pool}
+	env := sendingEnv{api: apiSrv, pool: pool, svc: svc}
 	var provSrv *httptest.Server
 	if fake == nil {
 		chaos.WebhookURL = apiSrv.URL + "/webhooks/provider"
@@ -74,6 +75,10 @@ func sendingServerWith(t *testing.T, chaos mockprovider.Config, fake delivery.Pr
 
 	sender := delivery.NewSender(pool, fake, rate, quiet, obs)
 	var wg sync.WaitGroup
+	translator := &queue.Worker{Pool: pool, Hub: hub, Log: quiet, Kind: campaign.JobTranslate,
+		Handler: svc.HandleTranslateJob, OnFailed: svc.OnTranslateJobFailed, Concurrency: 2, PollEvery: 20 * time.Millisecond}
+	wg.Add(1)
+	go func() { defer wg.Done(); translator.Run(ctx) }()
 	for _, ch := range delivery.Channels {
 		w := &queue.Worker{Pool: pool, Hub: hub, Log: quiet, Kind: delivery.JobKind(ch),
 			Handler: sender.Handle, OnFailed: sender.OnFailed, Concurrency: 16,
@@ -106,6 +111,15 @@ func readyCampaign(t *testing.T, base, city string) string {
 		`{"language":"tr","sms":"Merhaba {{first_name}}, sana özel %30 indirim!","email_subject":"{{first_name}}, sana özel indirim","email_body":"Merhaba {{first_name}},\n\nSana özel %30 indirim var.\n\nSevgiler,\nEkip"}`); status != 200 {
 		t.Fatalf("content: %d %v", status, res)
 	}
+	waitUntil(t, "translations", 15*time.Second, func() bool {
+		_, c := call(t, "GET", base+"/api/campaigns/"+id, "")
+		for _, tr := range c["translations"].([]any) {
+			if tr.(map[string]any)["state"] == "translating" {
+				return false
+			}
+		}
+		return true
+	})
 	return id
 }
 
@@ -239,16 +253,18 @@ func TestEveryMessageSentExactlyOnceUnderChaos(t *testing.T) {
 	t.Logf("deliveries by status: %v; provider: %+v", byStatus, stats)
 }
 
-// recorder is a provider that records when each channel's sends happened.
+// recorder is a provider that records each send and when it happened.
 type recorder struct {
-	mu    sync.Mutex
-	calls map[string][]time.Time
+	mu       sync.Mutex
+	calls    map[string][]time.Time
+	messages []delivery.Message
 }
 
 func (r *recorder) Send(ctx context.Context, m delivery.Message) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls[m.Channel] = append(r.calls[m.Channel], time.Now())
+	r.messages = append(r.messages, m)
 	return "msg-" + m.Reference, nil
 }
 
@@ -597,5 +613,155 @@ func TestRecentGrid(t *testing.T) {
 	grid := body["grid"].(string)
 	if len(grid) != 50 || strings.Trim(grid, "tf") != "" {
 		t.Fatalf("grid = %q; want 50 codes, all sent (t) or failed (f)", grid)
+	}
+}
+
+func TestScheduledSendWaitsForItsTime(t *testing.T) {
+	rec := &recorder{calls: map[string][]time.Time{}}
+	env := sendingServer(t, mockprovider.Config{}, rec, 1000)
+	env.svc.MinScheduleLead = 0 // so the test can schedule a second ahead
+	id := readyCampaign(t, env.api.URL, "Trabzon")
+
+	sendAt := time.Now().Add(1500 * time.Millisecond).UTC().Truncate(time.Millisecond)
+	status, res := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", `{"send_at":"`+sendAt.Format(time.RFC3339Nano)+`"}`)
+	if status != 200 || res["campaign"].(map[string]any)["status"] != "scheduled" {
+		t.Fatalf("schedule: %d %v", status, res)
+	}
+	time.Sleep(500 * time.Millisecond)
+	rec.mu.Lock()
+	early := len(rec.calls["sms"]) + len(rec.calls["email"])
+	rec.mu.Unlock()
+	if early != 0 {
+		t.Fatalf("%d messages went out before the scheduled time", early)
+	}
+
+	waitUntil(t, "the scheduled campaign to complete", 30*time.Second, func() bool {
+		_, c := call(t, "GET", env.api.URL+"/api/campaigns/"+id, "")
+		return c["status"] == "completed"
+	})
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, ch := range delivery.Channels {
+		for _, at := range rec.calls[ch] {
+			if at.Before(sendAt) {
+				t.Fatalf("%s sent at %s, before the scheduled %s", ch, at.Format(time.StampMilli), sendAt.Format(time.StampMilli))
+			}
+		}
+	}
+}
+
+func TestScheduleValidationAndCancel(t *testing.T) {
+	rec := &recorder{calls: map[string][]time.Time{}}
+	env := sendingServer(t, mockprovider.Config{}, rec, 1000)
+	id := readyCampaign(t, env.api.URL, "Trabzon")
+	approve := func(at time.Time) (int, map[string]any) {
+		return call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", `{"send_at":"`+at.Format(time.RFC3339)+`"}`)
+	}
+
+	for name, at := range map[string]time.Time{
+		"in the past":       time.Now().Add(-time.Hour),
+		"too soon":          time.Now().Add(10 * time.Second),
+		"more than 30 days": time.Now().Add(31 * 24 * time.Hour),
+	} {
+		if status, res := approve(at); status != 400 {
+			t.Errorf("%s: %d %v, want 400", name, status, res)
+		}
+	}
+
+	if status, res := approve(time.Now().Add(time.Hour)); status != 200 {
+		t.Fatalf("schedule an hour ahead: %d %v", status, res)
+	}
+	var deliveries int
+	env.pool.QueryRow(context.Background(), `SELECT count(*) FROM deliveries WHERE campaign_id = $1`, id).Scan(&deliveries)
+	if deliveries == 0 {
+		t.Fatal("scheduling should fix the audience now")
+	}
+
+	status, c := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/unschedule", "")
+	if status != 200 || c["status"] != "content_ready" || c["scheduled_at"] != nil {
+		t.Fatalf("cancel: %d %v", status, c)
+	}
+	var left, jobs int
+	env.pool.QueryRow(context.Background(), `SELECT count(*) FROM deliveries WHERE campaign_id = $1`, id).Scan(&left)
+	env.pool.QueryRow(context.Background(), `SELECT count(*) FROM jobs WHERE kind LIKE 'send_%'`).Scan(&jobs)
+	if left != 0 || jobs != 0 {
+		t.Fatalf("after cancel: %d deliveries, %d send jobs left", left, jobs)
+	}
+	if status, _ := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/unschedule", ""); status != 409 {
+		t.Errorf("cancelling twice: %d, want 409", status)
+	}
+	// It can be sent (or scheduled) again afterwards.
+	if status, res := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", ""); status != 200 {
+		t.Fatalf("send after cancel: %d %v", status, res)
+	}
+}
+
+// sentSMSByLanguage sends a ready campaign and returns, per user language, the
+// set of SMS bodies (with the first name put back as {{first_name}}).
+func sentSMSByLanguage(t *testing.T, env sendingEnv, rec *recorder, id string) map[string]map[string]bool {
+	t.Helper()
+	if status, res := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", ""); status != 200 {
+		t.Fatalf("approve: %d %v", status, res)
+	}
+	waitUntil(t, "sending to finish", 30*time.Second, func() bool {
+		_, c := call(t, "GET", env.api.URL+"/api/campaigns/"+id, "")
+		return c["status"] == "completed"
+	})
+	out := map[string]map[string]bool{}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, m := range rec.messages {
+		if m.Channel != "sms" {
+			continue
+		}
+		var lang, first string
+		env.pool.QueryRow(context.Background(), `SELECT u.language, u.first_name FROM deliveries d JOIN users u ON u.id = d.user_id
+			WHERE d.id = $1::bigint`, m.Reference).Scan(&lang, &first)
+		if out[lang] == nil {
+			out[lang] = map[string]bool{}
+		}
+		out[lang][strings.Replace(m.Body, first, "{{first_name}}", 1)] = true
+	}
+	return out
+}
+
+func TestEachUserGetsTheirLanguage(t *testing.T) {
+	rec := &recorder{calls: map[string][]time.Time{}}
+	env := sendingServer(t, mockprovider.Config{}, rec, 2000)
+	id := readyCampaign(t, env.api.URL, "Trabzon") // main language Turkish; some users speak English
+
+	_, c := call(t, "GET", env.api.URL+"/api/campaigns/"+id, "")
+	trs := c["translations"].([]any)
+	if len(trs) != 1 || trs[0].(map[string]any)["language"] != "en" || trs[0].(map[string]any)["state"] != "ready" {
+		t.Fatalf("translations = %v", trs)
+	}
+	enSMS := trs[0].(map[string]any)["sms"].(string)
+
+	got := sentSMSByLanguage(t, env, rec, id)
+	if len(got["tr"]) != 1 || !got["tr"][c["sms"].(string)] {
+		t.Errorf("Turkish speakers got %v, want only the Turkish SMS", got["tr"])
+	}
+	if len(got["en"]) != 1 || !got["en"][enSMS] {
+		t.Errorf("English speakers got %v, want only the English SMS %q", got["en"], enSMS)
+	}
+}
+
+func TestFailedOrStaleTranslationFallsBackToMainLanguage(t *testing.T) {
+	for name, sql := range map[string]string{
+		"failed": `UPDATE campaign_translations SET state = 'failed' WHERE campaign_id = $1`,
+		"stale":  `UPDATE campaign_translations SET version = version - 1 WHERE campaign_id = $1`, // made from older messages
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{calls: map[string][]time.Time{}}
+			env := sendingServer(t, mockprovider.Config{}, rec, 2000)
+			id := readyCampaign(t, env.api.URL, "Trabzon")
+			env.pool.Exec(context.Background(), sql, id)
+			_, c := call(t, "GET", env.api.URL+"/api/campaigns/"+id, "")
+
+			got := sentSMSByLanguage(t, env, rec, id)
+			if len(got["en"]) != 1 || !got["en"][c["sms"].(string)] {
+				t.Fatalf("English speakers got %v, want the main (Turkish) SMS", got["en"])
+			}
+		})
 	}
 }

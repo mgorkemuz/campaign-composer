@@ -1,15 +1,39 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '@/lib/api'
 import type { Campaign, Channel, DeliveryRow, Progress } from '@/lib/types'
-import { RotateCcw } from 'lucide-vue-next'
+import { CalendarClock, RotateCcw } from 'lucide-vue-next'
 import Button from './ui/Button.vue'
 import Card from './ui/Card.vue'
 import PixelGrid from './PixelGrid.vue'
 import StatTile from './StatTile.vue'
 
 const props = defineProps<{ campaign: Campaign; progress: Progress | null }>()
-const emit = defineEmits<{ resent: [] }>()
+const emit = defineEmits<{ resent: []; unscheduled: [c: Campaign] }>()
+
+// Scheduled: show when it will go out, with a countdown, and allow cancelling.
+const now = ref(Date.now())
+const tick = window.setInterval(() => (now.value = Date.now()), 15000)
+onBeforeUnmount(() => clearInterval(tick))
+const scheduledLabel = computed(() => props.campaign.scheduled_at
+  ? new Date(props.campaign.scheduled_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '')
+const countdown = computed(() => {
+  if (!props.campaign.scheduled_at) return ''
+  const mins = Math.max(0, Math.round((new Date(props.campaign.scheduled_at).getTime() - now.value) / 60000))
+  return mins < 60 ? `in ${mins} min` : `in ${Math.floor(mins / 60)} h ${mins % 60} min`
+})
+const cancelling = ref(false)
+const cancelError = ref('')
+async function cancelSchedule() {
+  cancelling.value = true
+  cancelError.value = ''
+  try {
+    emit('unscheduled', await api.unschedule(props.campaign.id))
+  } catch (e) {
+    cancelError.value = (e as Error).message
+    cancelling.value = false
+  }
+}
 
 // Resend what did not arrive, once sending has finished.
 const confirming = ref(false)
@@ -69,6 +93,16 @@ watch(() => props.progress, async () => {
 
 <template>
   <div class="space-y-6">
+    <div v-if="campaign.status === 'scheduled'" class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-5 py-4">
+      <p class="flex items-center gap-2 text-sm">
+        <CalendarClock class="size-4 text-st-sent" />
+        Scheduled for <span class="font-medium">{{ scheduledLabel }}</span>
+        <span class="text-muted-foreground">({{ countdown }})</span>
+      </p>
+      <Button variant="outline" :loading="cancelling" @click="cancelSchedule">Cancel schedule</Button>
+      <p v-if="cancelError" class="w-full text-sm text-destructive">{{ cancelError }}</p>
+    </div>
+
     <div class="grid grid-cols-2 gap-3 md:grid-cols-5">
       <StatTile label="Done" :value="`${done.toLocaleString()} / ${grand.toLocaleString()}`" />
       <StatTile label="Delivered" :value="all(['delivered'])" swatch="bg-st-delivered" />

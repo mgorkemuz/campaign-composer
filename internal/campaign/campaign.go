@@ -25,6 +25,7 @@ const (
 	StatusAudienceReady = "audience_ready"
 	StatusContentReady  = "content_ready"
 	StatusApproved      = "approved"
+	StatusScheduled     = "scheduled"
 	StatusSending       = "sending"
 	StatusCompleted     = "completed"
 	StatusFailed        = "failed"
@@ -65,7 +66,11 @@ type Campaign struct {
 	ContentError json.RawMessage `json:"content_error"`
 	ContentCheck *message.Check  `json:"content_check"`
 
+	// Translations are the messages in the other languages the audience speaks.
+	Translations []Translation `json:"translations"`
+
 	ApprovedAt  *time.Time `json:"approved_at"`
+	ScheduledAt *time.Time `json:"scheduled_at"`
 	CompletedAt *time.Time `json:"completed_at"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -89,6 +94,8 @@ type Service struct {
 	LLMTimeout time.Duration
 	// DeliveryMaxAttempts is how many times one message is tried.
 	DeliveryMaxAttempts int
+	// MinScheduleLead is how far ahead a scheduled send must be; tests lower it.
+	MinScheduleLead time.Duration
 }
 
 func NewService(pool *pgxpool.Pool, c *composer.Composer, now func() time.Time) *Service {
@@ -96,7 +103,7 @@ func NewService(pool *pgxpool.Pool, c *composer.Composer, now func() time.Time) 
 		now = time.Now
 	}
 	return &Service{pool: pool, composer: c, now: now, LLMTimeout: 2 * time.Minute,
-		DeliveryMaxAttempts: DefaultDeliveryMaxAttempts}
+		DeliveryMaxAttempts: DefaultDeliveryMaxAttempts, MinScheduleLead: time.Minute}
 }
 
 func (s *Service) Create(ctx context.Context, brief string) (Campaign, error) {
@@ -118,7 +125,7 @@ const selectCampaign = `
 	SELECT id::text, brief, status, rule, audience_summary, audience_assumptions,
 	       audience_total, sms_reachable, email_reachable, audience_longest, llm_model,
 	       language, sms_body, email_subject, email_body, content_state, content_error, content_check,
-	       approved_at, completed_at, created_at, updated_at
+	       approved_at, scheduled_at, completed_at, created_at, updated_at
 	FROM campaigns`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -129,7 +136,7 @@ func scan(row scanner) (Campaign, error) {
 	err := row.Scan(&c.ID, &c.Brief, &c.Status, &rule, &c.AudienceSummary, &c.AudienceAssumptions,
 		&c.AudienceTotal, &c.SMSReachable, &c.EmailReachable, &c.AudienceLongest, &c.LLMModel,
 		&c.Language, &c.SMS, &c.EmailSubject, &c.EmailBody, &c.ContentState, &c.ContentError, &c.ContentCheck,
-		&c.ApprovedAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt)
+		&c.ApprovedAt, &c.ScheduledAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return Campaign{}, store.MapErr(err)
 	}
@@ -147,7 +154,12 @@ func scan(row scanner) (Campaign, error) {
 func mapNotFound(err error) error { return store.MapErr(err) }
 
 func (s *Service) Get(ctx context.Context, id string) (Campaign, error) {
-	return scan(s.pool.QueryRow(ctx, selectCampaign+` WHERE id = $1`, id))
+	c, err := scan(s.pool.QueryRow(ctx, selectCampaign+` WHERE id = $1`, id))
+	if err != nil {
+		return c, err
+	}
+	c.Translations, err = s.translations(ctx, id)
+	return c, err
 }
 
 func (s *Service) List(ctx context.Context, limit int) ([]Campaign, error) {

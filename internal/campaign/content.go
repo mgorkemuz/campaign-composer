@@ -134,6 +134,9 @@ func (s *Service) HandleContentJob(ctx context.Context, job queue.Job) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return store.MapErr(err) // nil when superseded: nothing to save
 		}
+		if err := s.queueTranslations(ctx, tx, p.CampaignID); err != nil {
+			return err
+		}
 		_, err = events.Add(ctx, tx, Topic(p.CampaignID), "content_ready", gen)
 		return err
 	})
@@ -223,6 +226,9 @@ func (s *Service) SetContent(ctx context.Context, id string, content message.Con
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrWrongStatus
+		}
+		if err := s.queueTranslations(ctx, tx, id); err != nil {
+			return err
 		}
 		_, err = events.Add(ctx, tx, Topic(id), "content_ready",
 			composer.GeneratedContent{Content: content, Check: check, Model: "edited by hand"})

@@ -242,6 +242,35 @@ What changed in the port, and why:
   and the live dashboard, at desktop and phone width, with no console errors. That walk-through caught auto-start
   silently doing nothing: the step's component wasn't rendered yet when it was called. It's fixed with `nextTick`.
 
+## Bonus features
+
+- **CI** (`.github/workflows/ci.yml`): on every push and pull request, GitHub runs the Go tests (with `-race`,
+  `go vet` and `gofmt`), the frontend type check, tests and build, and a Docker image build. It needs no secrets:
+  tests use the mock LLM and embedded Postgres, whose binaries are cached between runs.
+- **Scheduled sending.** "Schedule" on the review page approves now and sends later.
+  - The audience is fixed at approval (the people the marketer reviewed), and each send job's `run_at` is the
+    chosen time, so the queue's scheduling does the waiting.
+  - The campaign shows `scheduled` until its first message goes out, and can be cancelled until then: its queued
+    jobs and deliveries are removed and it returns to "ready to send".
+  - The time must be 1 minute to 30 days ahead, checked against real time. A test caught the check using the
+    pinned business clock, which accepted a time in the past.
+- **Each user in their own language.** Once the main messages are ready (generated or edited), the server looks at
+  which languages the reachable audience speaks and queues **one translation job per other language**. It is never
+  one per user: messages are templates, so 100 languages cost at most 100 short calls, whatever the audience size.
+  - Claude adapts rather than translates word for word.
+  - The result must keep exactly the same `{{variables}}` per field, and pass the same length checks measured for
+    that language's users (one repair round, like the main messages).
+  - Each translation records the `content_version` it was made from. Users get their language's ready translation
+    of the current messages, and otherwise the main language: failed, outdated or missing translations all fall
+    back.
+  - Approval waits while translations are being written. The translation workers' concurrency bounds parallel LLM
+    calls, which keeps rate limits in check with many languages.
+  - Tests check each user receives their own language's SMS, and the fallback for failed and outdated
+    translations.
+- **A/B variants: left out on purpose.** The mock provider reports delivery only: no opens, clicks or purchases.
+  Comparing two versions would only compare delivery rates, which say nothing about which copy works better.
+  With engagement events, it would be a variant column on deliveries plus a split at approval.
+
 ## Known limits at high scale
 
 Built and tested for thousands of users, as the case asks. I measured what changes at **1,000,000 deliveries in

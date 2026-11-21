@@ -44,7 +44,10 @@ export const api = {
   setContent: (id: string, c: { language: string; sms: string; email_subject: string; email_body: string }) =>
     request<Campaign>('PUT', `/api/campaigns/${id}/content`, c),
 
-  approve: (id: string) => request<{ campaign: Campaign; sms: number; email: number }>('POST', `/api/campaigns/${id}/approve`),
+  approve: (id: string, sendAt?: Date) =>
+    request<{ campaign: Campaign; sms: number; email: number }>('POST', `/api/campaigns/${id}/approve`,
+      sendAt ? { send_at: sendAt.toISOString() } : undefined),
+  unschedule: (id: string) => request<Campaign>('POST', `/api/campaigns/${id}/unschedule`),
   recentGrid: () => request<{ grid: string }>('GET', '/api/deliveries/recent?limit=2000'),
   resend: (id: string) => request<{ resent: number }>('POST', `/api/campaigns/${id}/resend`),
   deliveries: (id: string, status = '', limit = 50) =>

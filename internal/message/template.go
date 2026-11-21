@@ -94,6 +94,15 @@ func allowedVars() string {
 	return strings.Join(parts, ", ")
 }
 
+// VariablesIn lists the variable names a text uses, in order of appearance.
+func VariablesIn(text string) []string {
+	var out []string
+	for _, m := range varRe.FindAllStringSubmatch(text, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
 // Render fills the variables for one recipient.
 func Render(text string, r Recipient) string {
 	return varRe.ReplaceAllStringFunc(text, func(m string) string {

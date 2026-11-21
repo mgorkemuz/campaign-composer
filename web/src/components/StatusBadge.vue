@@ -8,6 +8,7 @@ const look = computed(() => ({
   audience_ready: ['Audience ready', 'bg-st-active'],
   content_ready: ['Ready to approve', 'bg-st-sent'],
   approved: ['Approved', 'bg-st-sent'],
+  scheduled: ['Scheduled', 'bg-st-sent'],
   sending: ['Sending', 'bg-st-active'],
   completed: ['Completed', 'bg-st-delivered'],
   failed: ['Failed', 'bg-st-failed'],

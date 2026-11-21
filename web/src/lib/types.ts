@@ -57,7 +57,7 @@ export interface ApiErrorBody {
 }
 
 export type CampaignStatus =
-  | 'draft' | 'audience_ready' | 'content_ready' | 'approved' | 'sending' | 'completed' | 'failed'
+  | 'draft' | 'audience_ready' | 'content_ready' | 'approved' | 'scheduled' | 'sending' | 'completed' | 'failed'
 
 export type ContentState = 'none' | 'generating' | 'ready' | 'failed' | 'invalid'
 
@@ -80,10 +80,23 @@ export interface Campaign {
   content_state: ContentState
   content_error: ApiErrorBody | null
   content_check: ContentCheck | null
+  translations: Translation[]
   approved_at: string | null
+  scheduled_at: string | null
   completed_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface Translation {
+  language: string
+  state: 'translating' | 'ready' | 'failed'
+  recipients: number
+  sms: string
+  email_subject: string
+  email_body: string
+  content_check: ContentCheck | null
+  error: ApiErrorBody | null
 }
 
 export interface AudienceResult {

@@ -15,18 +15,43 @@ import (
 )
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	res, err := s.campaigns.Approve(r.Context(), r.PathValue("id"))
+	// An optional {"send_at": "<RFC 3339>"} schedules the campaign instead of
+	// sending now.
+	var req struct {
+		SendAt *time.Time `json:"send_at"`
+	}
+	if r.ContentLength != 0 && !decodeJSON(w, r, &req) {
+		return
+	}
+	res, err := s.campaigns.Approve(r.Context(), r.PathValue("id"), req.SendAt)
 	var ce *campaign.ContentError
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, res)
+	case errors.Is(err, campaign.ErrBadSchedule):
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.As(err, &ce):
 		writeProblems(w, http.StatusUnprocessableEntity, "invalid_content",
 			"the messages no longer fit this audience; edit or regenerate them", ce.Problems)
 	case errors.Is(err, campaign.ErrNotReady):
 		writeError(w, http.StatusConflict, "not_ready", err.Error())
+	case errors.Is(err, campaign.ErrTranslating):
+		writeError(w, http.StatusConflict, "translating", "translations are still being written; send when they are ready")
 	case errors.Is(err, campaign.ErrWrongStatus):
 		writeError(w, http.StatusConflict, "already_approved", "this campaign has already been approved")
+	default:
+		s.storeError(w, r, err, "campaign")
+	}
+}
+
+// handleUnschedule cancels a scheduled campaign before its send time.
+func (s *Server) handleUnschedule(w http.ResponseWriter, r *http.Request) {
+	c, err := s.campaigns.CancelSchedule(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, c)
+	case errors.Is(err, campaign.ErrWrongStatus):
+		writeError(w, http.StatusConflict, "wrong_status", "only a scheduled campaign that has not started can be cancelled")
 	default:
 		s.storeError(w, r, err, "campaign")
 	}

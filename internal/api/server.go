@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/campaigns/{id}/events", s.handleCampaignEvents)
 	mux.HandleFunc("POST /api/campaigns/{id}/approve", s.handleApprove)
 	mux.HandleFunc("POST /api/campaigns/{id}/resend", s.handleResend)
+	mux.HandleFunc("POST /api/campaigns/{id}/unschedule", s.handleUnschedule)
 	mux.HandleFunc("GET /api/deliveries/recent", s.handleRecentGrid)
 	mux.HandleFunc("GET /api/campaigns/{id}/deliveries", s.handleListDeliveries)
 	mux.HandleFunc("GET /api/campaigns/{id}/deliveries/counts", s.handleDeliveryCounts)

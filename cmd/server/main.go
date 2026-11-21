@@ -85,6 +85,14 @@ func run() error {
 	}
 	workers.Add(1)
 	go func() { defer workers.Done(); contentWorker.Run(bgCtx) }()
+	translateWorker := &queue.Worker{
+		Pool: pool, Hub: hub, Log: log, Kind: campaign.JobTranslate,
+		Handler: campaigns.HandleTranslateJob, OnFailed: campaigns.OnTranslateJobFailed,
+		Concurrency: 4, // bounds parallel LLM calls (rate limits) however many languages
+		LeaseTTL:    3 * time.Minute,
+	}
+	workers.Add(1)
+	go func() { defer workers.Done(); translateWorker.Run(bgCtx) }()
 
 	// One worker pool per channel. Each send waits for its channel's rate
 	// limiter, so a pool never exceeds SendRate however many workers it has.
