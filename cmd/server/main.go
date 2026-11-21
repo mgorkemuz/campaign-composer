@@ -102,6 +102,7 @@ func run() error {
 
 	apiSrv := api.New(pool, log, api.Options{
 		Hub: hub, Campaigns: campaigns, WebhookSecret: cfg.WebhookSecret, Metrics: m, Ring: sender.Ring,
+		WebDir: cfg.WebDir,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,

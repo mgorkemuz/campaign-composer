@@ -45,16 +45,17 @@ const (
 const MaxBriefLength = 2000
 
 type Campaign struct {
-	ID                  string        `json:"id"`
-	Brief               string        `json:"brief"`
-	Status              string        `json:"status"`
-	Rule                *segment.Rule `json:"rule"`
-	AudienceSummary     string        `json:"audience_summary"`
-	AudienceAssumptions []string      `json:"audience_assumptions"`
-	AudienceTotal       *int          `json:"audience_total"`
-	SMSReachable        *int          `json:"sms_reachable"`
-	EmailReachable      *int          `json:"email_reachable"`
-	LLMModel            string        `json:"llm_model"`
+	ID                  string           `json:"id"`
+	Brief               string           `json:"brief"`
+	Status              string           `json:"status"`
+	Rule                *segment.Rule    `json:"rule"`
+	AudienceSummary     string           `json:"audience_summary"`
+	AudienceAssumptions []string         `json:"audience_assumptions"`
+	AudienceTotal       *int             `json:"audience_total"`
+	SMSReachable        *int             `json:"sms_reachable"`
+	EmailReachable      *int             `json:"email_reachable"`
+	AudienceLongest     *message.Longest `json:"audience_longest"`
+	LLMModel            string           `json:"llm_model"`
 
 	Language     *string         `json:"language"`
 	SMS          string          `json:"sms"`
@@ -115,7 +116,7 @@ func (s *Service) Create(ctx context.Context, brief string) (Campaign, error) {
 
 const selectCampaign = `
 	SELECT id::text, brief, status, rule, audience_summary, audience_assumptions,
-	       audience_total, sms_reachable, email_reachable, llm_model,
+	       audience_total, sms_reachable, email_reachable, audience_longest, llm_model,
 	       language, sms_body, email_subject, email_body, content_state, content_error, content_check,
 	       approved_at, completed_at, created_at, updated_at
 	FROM campaigns`
@@ -126,7 +127,7 @@ func scan(row scanner) (Campaign, error) {
 	var c Campaign
 	var rule []byte
 	err := row.Scan(&c.ID, &c.Brief, &c.Status, &rule, &c.AudienceSummary, &c.AudienceAssumptions,
-		&c.AudienceTotal, &c.SMSReachable, &c.EmailReachable, &c.LLMModel,
+		&c.AudienceTotal, &c.SMSReachable, &c.EmailReachable, &c.AudienceLongest, &c.LLMModel,
 		&c.Language, &c.SMS, &c.EmailSubject, &c.EmailBody, &c.ContentState, &c.ContentError, &c.ContentCheck,
 		&c.ApprovedAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
@@ -141,6 +142,9 @@ func scan(row scanner) (Campaign, error) {
 	}
 	return c, nil
 }
+
+// mapNotFound turns "no rows" (or a malformed ID) into store.ErrNotFound.
+func mapNotFound(err error) error { return store.MapErr(err) }
 
 func (s *Service) Get(ctx context.Context, id string) (Campaign, error) {
 	return scan(s.pool.QueryRow(ctx, selectCampaign+` WHERE id = $1`, id))

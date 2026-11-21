@@ -42,7 +42,8 @@ func joined(deltas []delta, attempt int, field string) string {
 
 func TestGenerateContentStreamsFields(t *testing.T) {
 	fake := llmtest.New(llmtest.Text(goodContent))
-	got, deltas, err := generate(t, fake, ContentRequest{Brief: exampleBrief, AudienceSummary: "İstanbul cart abandoners", Longest: longest})
+	got, deltas, err := generate(t, fake, ContentRequest{Brief: exampleBrief, AudienceSummary: "İstanbul cart abandoners",
+		AudienceFacts: []string{"Last purchase: not in the last 30 days (or never)"}, Longest: longest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +63,12 @@ func TestGenerateContentStreamsFields(t *testing.T) {
 		t.Errorf("no language chosen, but the schema allows only %v", langs)
 	}
 	user := req.Messages[0].Text
+	if !strings.Contains(tagged(user, "audience"), "- Last purchase: not in the last 30 days (or never)") {
+		t.Errorf("prompt lacks the audience facts:\n%s", user)
+	}
+	if req.Effort != "medium" {
+		t.Errorf("content effort = %q, want medium", req.Effort)
+	}
 	if !strings.Contains(tagged(user, "limits"), "first name 11 characters") || tagged(user, "audience") == "" {
 		t.Errorf("prompt lacks limits or audience:\n%s", user)
 	}

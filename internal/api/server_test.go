@@ -142,3 +142,34 @@ func TestStreamReplaysThenFollowsLive(t *testing.T) {
 		t.Fatalf("events = %v, want %v", got, want)
 	}
 }
+
+func TestWebHandlerServesAppAndFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/index.html", []byte("<html>app</html>"), 0o644)
+	os.MkdirAll(dir+"/assets", 0o755)
+	os.WriteFile(dir+"/assets/app-123.js", []byte("console.log(1)"), 0o644)
+	ts := httptest.NewServer(New(nil, quiet, Options{WebDir: dir}).Handler())
+	defer ts.Close()
+
+	for path, want := range map[string]string{
+		"/":                  "<html>app</html>",
+		"/campaigns/abc":     "<html>app</html>", // client-side route
+		"/assets/app-123.js": "console.log(1)",
+		"/../../etc/passwd":  "<html>app</html>", // no escape from the directory
+	} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if string(body) != want {
+			t.Errorf("GET %s = %q, want %q", path, body, want)
+		}
+	}
+	resp, _ := http.Get(ts.URL + "/api/nope")
+	if resp.StatusCode != 404 || resp.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("/api paths must not fall back to the app: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}

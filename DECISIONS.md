@@ -122,6 +122,12 @@ What changed in the port, and why:
 - **Newest wins.** Every generation request or hand edit bumps `content_version`, and a job saves only if the
   version is still its own. While a generation runs, the audience is locked (409 `generating`).
 - **Hand edits pass the same checks** as generated messages (`PUT /content`, 422 with every problem).
+- **The copy is written for this audience, not just from the brief.** The message step gets the audience's
+  conditions in plain words (`segment.Describe`, e.g. "Last purchase: not in the last 60 days (or never)"). The
+  prompt asks Claude to work out the goal: win back lapsed buyers, get carts finished, welcome new sign-ups. It then
+  says why the person is hearing from you, gives one concrete reason to act, and ends with a clear call to action.
+  This step runs at medium effort (the audience step stays low). The first version only passed a one-line summary,
+  and the copy came out generic.
 - **The database must be UTF-8.** Embedded Postgres defaulted to `SQL_ASCII`, where `char_length('Eskişehir')`
   is 10 (bytes), not 9. A test caught this through a wrong SMS length. Embedded databases are now created as
   UTF-8, the server refuses to start on any other encoding, and a test fails if a test database isn't UTF-8.
@@ -195,6 +201,70 @@ What changed in the port, and why:
   builds the full snapshot only after sending is done.
 - **In Docker,** a 2,623-message campaign streamed 46 snapshots over 24 s, about 90 msg/s per channel at the
   100/s limit, and the stream closed itself once the last receipt arrived.
+
+## Frontend
+
+- **Stack:**
+  - Vue 3 (`<script setup>`, TypeScript), vue-router, Vite and Tailwind v4.
+  - Design tokens from my earlier project (shadcn neutral with a warm tint, Geist font, 0.625rem radius).
+  - Small hand-written components instead of the shadcn-vue CLI, to keep dependencies few.
+  - Fonts are self-hosted through `@fontsource`.
+- **One origin.** The Go server serves the built app (`WEB_DIR`, with an `index.html` fallback for client
+  routes), so no CORS is needed. In development, Vite proxies `/api` to the server.
+- **Live updates through `EventSource`,** which reconnects by itself with `Last-Event-ID`. Message text streams
+  into the editors and previews as `delta` events. A new attempt number (the repair round) clears the boxes and
+  starts over.
+- **The pixel grid is a `<canvas>`,** one square per delivery coloured by status, drawn from the `progress`
+  event's grid string. Thousands of squares redrawn twice a second would be slow as DOM elements. Hovering a square
+  shows its status. The status colours come from CSS variables shared with the badges and bars.
+- **The SMS counter mirrors the server's check in TypeScript** (worst-case length against the audience's longest
+  names, GSM-7 vs UCS-2 parts), so it updates as the marketer types. The server still validates on save and at
+  approval. The audience's longest values are saved with the audience (`audience_longest`), so both sides measure
+  the same thing.
+- **Rule chips:** edit a value in place, remove a condition, or "refine" with an instruction to Claude. Every edit
+  goes through the same server validation, and errors come back with the full list of problems.
+- **One decision: send.** The audience is already in the brief, so asking the marketer to approve it again added a
+  click and no information. After the brief, the app builds the audience and writes the messages without stopping.
+  The marketer lands on a single "Ready to send" page with Edit buttons, and "Send" (with a confirm showing the
+  exact count) is the only approval.
+- **Screens:** Brief → Preparing (automatic, shows each step and the SMS streaming in) → Ready to send → Live. A
+  small step indicator runs across the top, with as little text as possible; editing is behind "Edit".
+- **The server chains the steps, not the browser.** When the AI finishes an audience and the campaign has no
+  messages yet, the backend queues message generation itself. So a campaign reaches "ready to send" even if the tab
+  is closed, or is an old copy of the app that doesn't know the new flow. (The first version chained in the browser.
+  A stale tab still showed the old "Write messages" button and left campaigns half done.) Hand-edited rules don't
+  trigger it: by then the marketer is on the review page.
+- **Home page hero,** inspired by pixel-grid web design: a large two-line headline and a justified tagline over a
+  vertical rule. Below is a full-width band of small squares in the delivery-status colours, generated from value
+  noise, dense at the top and dissolving downwards. It drifts slowly; it doesn't animate when reduced motion is set
+  or the tab is hidden. All wording and graphics are our own. The background grid is a fine 12 px.
+- **Checked in the browser:** a Turkish brief went through audience (auto-started), streamed messages, approval
+  and the live dashboard, at desktop and phone width, with no console errors. That walk-through caught auto-start
+  silently doing nothing: the step's component wasn't rendered yet when it was called. It's fixed with `nextTick`.
+
+## Known limits at high scale
+
+Built and tested for thousands of users, as the case asks. I measured what changes at **1,000,000 deliveries in
+one campaign** (one throwaway Postgres database, Docker on a laptop). At the required 100 msg/s per channel, such
+a campaign sends for about 83 minutes per channel, so every screen and query must stay cheap that whole time.
+In the order they would break:
+
+| What breaks | Measured at 1M | Why | Fix when needed |
+| --- | --- | --- | --- |
+| **Live dashboard** | progress snapshot 3.8 s, 1 MB grid string; counts alone 115 ms | Each viewer's stream re-aggregates every delivery every 500 ms, and the grid has one character per message | A fixed-size grid (~2,000 squares, each a bucket of messages coloured by its worst status). Counts in a counters table, or computed once per campaign per second and shared by all viewers |
+| **Approval** | 15.6 s for 1M deliveries + 1M jobs in one transaction | One `INSERT … SELECT` per table inside the HTTP request | Answer at once and fan out in background batches of ~10,000; the unique key already makes a repeated batch harmless |
+| **Storage and write load** | 296 MB deliveries + 268 MB jobs per 1M messages; ~4 row updates per message | A job row per delivery, and finished jobs are never deleted | Make the delivery row the queue (lease columns on `deliveries`), claim in small batches, delete finished jobs after N days, partition deliveries by month |
+| **Rate limit with replicas** | n/a | The token bucket lives in one process; two app replicas would send 200/s per channel | A shared limiter in Postgres or Redis, or one elected sender per channel |
+| **Provider outage** | n/a | A million jobs would cycle through retries (spread by backoff and jitter, but still churn) | A circuit breaker per channel that pauses sending while the provider's error rate is high |
+| **Audience preview** | n/a (~100–300 ms expected without indexes) | Full scans over `users` for each preview and the longest-name check | Indexes on the filterable columns; cache a rule's preview for a few seconds |
+| **"Not delivered" list** | n/a | Sorted by `updated_at` within a campaign | An index on `(campaign_id, status, updated_at)` |
+
+Already fine at that size:
+- A queue claim stays at 10 ms with 400,000 jobs waiting (partial index plus `SKIP LOCKED`).
+- Doorbells are throttled.
+- The LLM runs once per campaign, not per person.
+- The exactly-once guarantees don't depend on size.
+- The home page band reads only the newest rows by primary key.
 
 ## Models
 

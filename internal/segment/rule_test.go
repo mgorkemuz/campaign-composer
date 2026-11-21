@@ -186,3 +186,16 @@ func TestSchemaListsCatalog(t *testing.T) {
 		}
 	}
 }
+
+func TestDescribe(t *testing.T) {
+	r := mustParse(t, `{"match":"all","conditions":[
+		{"field":"city","op":"in","value":["izmir","ankara"]},
+		{"field":"total_spent","op":"gt","value":2000},
+		{"field":"last_purchase_at","op":"not_within_days","value":60},
+		{"match":"any","conditions":[{"field":"language","op":"eq","value":"en"},{"field":"last_cart_at","op":"never","value":null}]}]}`)
+	got := strings.Join(Describe(r), " | ")
+	want := "City: İzmir or Ankara | Total spent (TRY): more than 2000 | Last purchase: not in the last 60 days (or never) | (Language: en or Last added to cart: never)"
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}

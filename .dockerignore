@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+.data
+bin
+web/node_modules
+web/dist
+ai-sessions
+*.local
+CLAUDE.local.md

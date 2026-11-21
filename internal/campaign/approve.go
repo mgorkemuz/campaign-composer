@@ -147,13 +147,15 @@ type DeliveryRow struct {
 	LastError string `json:"last_error"`
 	FirstName string `json:"first_name"`
 	City      string `json:"city"`
+	Permanent bool   `json:"permanent"` // rejected for good: resend skips it
+	Round     int    `json:"round"`     // 0 first send, 1+ resends
 }
 
 // Deliveries lists a campaign's deliveries, optionally of one status, newest
 // change first.
 func (s *Service) Deliveries(ctx context.Context, id, status string, limit int) ([]DeliveryRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT d.id, d.channel, d.status, d.attempts, d.last_error, u.first_name, u.city
+		SELECT d.id, d.channel, d.status, d.attempts, d.last_error, u.first_name, u.city, d.permanent, d.resend_count
 		FROM deliveries d JOIN users u ON u.id = d.user_id
 		WHERE d.campaign_id = $1 AND ($2 = '' OR d.status = $2)
 		ORDER BY d.updated_at DESC, d.id LIMIT $3`, id, status, limit)
@@ -164,7 +166,7 @@ func (s *Service) Deliveries(ctx context.Context, id, status string, limit int) 
 	out := []DeliveryRow{}
 	for rows.Next() {
 		var r DeliveryRow
-		if err := rows.Scan(&r.ID, &r.Channel, &r.Status, &r.Attempts, &r.LastError, &r.FirstName, &r.City); err != nil {
+		if err := rows.Scan(&r.ID, &r.Channel, &r.Status, &r.Attempts, &r.LastError, &r.FirstName, &r.City, &r.Permanent, &r.Round); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -71,30 +71,33 @@ func createCampaign(t *testing.T, ts *httptest.Server) string {
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func TestAudienceFlow(t *testing.T) {
-	fake := llmtest.New(llmtest.Text(claudeAnswer),
+	fake := llmtest.New(llmtest.Text(claudeAnswer), llmtest.Text(contentAnswer),
 		llmtest.Text(strings.Replace(claudeAnswer, `"Istanbul"`, `"Ankara"`, 1)))
-	ts := campaignServer(t, fake)
+	ts, _ := contentServer(t, fake)
 	id := createCampaign(t, ts)
+	stream := openStream(t, ts.URL+"/api/campaigns/"+id+"/events")
 
 	status, res := call(t, "POST", ts.URL+"/api/campaigns/"+id+"/audience", "")
 	if status != 200 {
 		t.Fatalf("generate: %d %v", status, res)
 	}
 	c := res["campaign"].(map[string]any)
-	if c["status"] != "audience_ready" || c["audience_total"].(float64) != 322 || c["audience_summary"] == "" {
+	if c["audience_total"].(float64) != 322 || c["audience_summary"] == "" || c["content_state"] != "generating" {
 		t.Fatalf("campaign after audience: %v", c)
 	}
 	if p := res["preview"].(map[string]any); len(p["sample"].([]any)) != 5 {
 		t.Fatalf("preview = %v", p)
 	}
+	waitEvent(t, stream, "content_ready") // messages followed without being asked
 
-	// Refine goes back to the LLM with the current rule.
+	// Refine goes back to the LLM with the current rule; the messages are re-checked, not rewritten.
 	status, res = call(t, "POST", ts.URL+"/api/campaigns/"+id+"/audience/refine", `{"instruction":"Ankara instead"}`)
 	if status != 200 {
 		t.Fatalf("refine: %d %v", status, res)
 	}
-	if got := res["campaign"].(map[string]any)["rule"].(map[string]any)["conditions"].([]any)[0].(map[string]any)["value"]; got != "Ankara" {
-		t.Fatalf("refined city = %v", got)
+	c = res["campaign"].(map[string]any)
+	if got := c["rule"].(map[string]any)["conditions"].([]any)[0].(map[string]any)["value"]; got != "Ankara" || c["status"] != "content_ready" {
+		t.Fatalf("refined: city=%v status=%v", got, c["status"])
 	}
 
 	// A hand edit is validated and replaces the summary.
@@ -110,7 +113,6 @@ func TestAudienceFlow(t *testing.T) {
 		t.Fatalf("bad hand edit: %d %v", status, res)
 	}
 
-	// The list shows the campaign.
 	_, list := call(t, "GET", ts.URL+"/api/campaigns", "")
 	if n := len(list["campaigns"].([]any)); n != 1 {
 		t.Fatalf("list has %d campaigns", n)

@@ -36,6 +36,8 @@ type Config struct {
 	SendRate float64
 	// SendWorkers is the number of concurrent senders per channel.
 	SendWorkers int
+	// WebDir holds the built Vue app (web/dist); the server serves it at /.
+	WebDir string
 }
 
 // DevWebhookSecret is used when WEBHOOK_SECRET is unset, for local runs only.
@@ -49,7 +51,7 @@ const DefaultModel = "claude-haiku-5-5"
 var keys = []string{
 	"PORT", "DATABASE_URL", "DATA_DIR", "LOG_FORMAT",
 	"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_WORKSPACE_ID", "SEED_USERS",
-	"PROVIDER_URL", "WEBHOOK_SECRET", "SEND_RATE_PER_SECOND", "SEND_WORKERS",
+	"PROVIDER_URL", "WEBHOOK_SECRET", "SEND_RATE_PER_SECOND", "SEND_WORKERS", "WEB_DIR",
 }
 
 // Load reads settings from the process environment. Values from envFile are
@@ -85,6 +87,7 @@ func Load(envFile string) (Config, error) {
 		WebhookSecret:        get("WEBHOOK_SECRET", DevWebhookSecret),
 		SendRate:             sendRate,
 		SendWorkers:          sendWorkers,
+		WebDir:               get("WEB_DIR", "web/dist"),
 		SeedUsers:            seedUsers,
 		Port:                 get("PORT", "8080"),
 		DatabaseURL:          get("DATABASE_URL", ""),

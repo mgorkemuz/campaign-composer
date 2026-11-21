@@ -109,7 +109,7 @@ func (s *Service) HandleContentJob(ctx context.Context, job queue.Job) error {
 
 	deltas := newDeltaWriter(s.pool, Topic(p.CampaignID))
 	gen, err := s.composer.GenerateContent(ctx, composer.ContentRequest{
-		Brief: c.Brief, AudienceSummary: c.AudienceSummary, Language: p.Language,
+		Brief: c.Brief, AudienceSummary: c.AudienceSummary, AudienceFacts: segment.Describe(*c.Rule), Language: p.Language,
 		Longest: longest, Instruction: p.Instruction,
 	}, deltas.add)
 	deltas.flush()

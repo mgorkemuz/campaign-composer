@@ -20,6 +20,7 @@ type Progress struct {
 	Throughput      map[string]float64 `json:"throughput"` // accepted per second, last 5 s
 	Retries         int                `json:"retries"`    // attempts beyond the first, all deliveries
 	PendingReceipts int                `json:"pending_receipts"`
+	Resendable      int                `json:"resendable"` // undelivered, or failed after temporary errors
 	CompletedAt     *time.Time         `json:"completed_at"`
 }
 
@@ -43,7 +44,8 @@ func (s *Service) Progress(ctx context.Context, id string) (Progress, error) {
 		           WHEN 'sent' THEN 't' WHEN 'delivered' THEN 'd' WHEN 'undelivered' THEN 'u'
 		           ELSE 'f' END, '' ORDER BY id),
 		       count(*) FILTER (WHERE sent_at > now() - make_interval(secs => $2)),
-		       coalesce(sum(greatest(attempts - 1, 0)), 0)
+		       coalesce(sum(greatest(attempts - 1, 0)), 0),
+		       count(*) FILTER (WHERE `+resendable+`)
 		FROM deliveries WHERE campaign_id = $1 GROUP BY channel`, id, throughputWindow)
 	if err != nil {
 		return Progress{}, err
@@ -55,13 +57,14 @@ func (s *Service) Progress(ctx context.Context, id string) (Progress, error) {
 	}
 	for rows.Next() {
 		var ch, grid string
-		var recent, retries int
-		if err := rows.Scan(&ch, &grid, &recent, &retries); err != nil {
+		var recent, retries, resend int
+		if err := rows.Scan(&ch, &grid, &recent, &retries, &resend); err != nil {
 			return Progress{}, err
 		}
 		p.Grid[ch] = grid
 		p.Throughput[ch] = float64(recent) / throughputWindow
 		p.Retries += retries
+		p.Resendable += resend
 		for _, c := range grid {
 			p.Counts[ch][statusOf[c]]++
 		}
@@ -83,4 +86,18 @@ func (p Progress) Settled(now time.Time) bool {
 		return p.PendingReceipts == 0 || (p.CompletedAt != nil && now.Sub(*p.CompletedAt) > receiptGrace)
 	}
 	return false
+}
+
+// RecentGrid returns the grid codes of the most recent deliveries across all
+// campaigns, oldest first. It reads only the newest rows by primary key, so it
+// costs the same at a thousand deliveries or a hundred million.
+func (s *Service) RecentGrid(ctx context.Context, limit int) (string, error) {
+	var grid string
+	err := s.pool.QueryRow(ctx, `
+		SELECT coalesce(string_agg(CASE status
+		           WHEN 'queued' THEN 'q' WHEN 'sending' THEN 's' WHEN 'retrying' THEN 'r'
+		           WHEN 'sent' THEN 't' WHEN 'delivered' THEN 'd' WHEN 'undelivered' THEN 'u'
+		           ELSE 'f' END, '' ORDER BY id), '')
+		FROM (SELECT id, status FROM deliveries ORDER BY id DESC LIMIT $1) recent`, limit).Scan(&grid)
+	return grid, err
 }

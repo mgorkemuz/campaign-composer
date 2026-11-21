@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"campaign-composer/internal/campaign"
@@ -29,6 +30,34 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.storeError(w, r, err, "campaign")
 	}
+}
+
+// handleResend sends again what did not arrive, as a new round.
+func (s *Server) handleResend(w http.ResponseWriter, r *http.Request) {
+	n, err := s.campaigns.ResendFailed(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]int{"resent": n})
+	case errors.Is(err, campaign.ErrWrongStatus):
+		writeError(w, http.StatusConflict, "wrong_status", "only a campaign that has finished sending can resend")
+	default:
+		s.storeError(w, r, err, "campaign")
+	}
+}
+
+// handleRecentGrid feeds the home page's pixel band: one character per recent
+// delivery, coloured by status in the UI.
+func (s *Server) handleRecentGrid(w http.ResponseWriter, r *http.Request) {
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit <= 0 || limit > 5000 {
+		limit = 2000
+	}
+	grid, err := s.campaigns.RecentGrid(r.Context(), limit)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"grid": grid})
 }
 
 func (s *Server) handleDeliveryCounts(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +127,8 @@ func (s *Server) handleReceipt(w http.ResponseWriter, r *http.Request) {
 	if applied {
 		outcome = "applied"
 		var campaignID string
-		if s.pool.QueryRow(r.Context(), `SELECT campaign_id::text FROM deliveries WHERE id = $1::bigint`, rc.Reference).Scan(&campaignID) == nil {
+		id, _, _ := strings.Cut(rc.Reference, ".")
+		if s.pool.QueryRow(r.Context(), `SELECT campaign_id::text FROM deliveries WHERE id = $1::bigint`, id).Scan(&campaignID) == nil {
 			s.ring(campaign.Topic(campaignID))
 		}
 	}

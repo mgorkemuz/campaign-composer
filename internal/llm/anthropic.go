@@ -82,6 +82,9 @@ func (a *Anthropic) Generate(ctx context.Context, req Request, onText func(strin
 		Messages:     toParams(req.Messages),
 		OutputConfig: anthropic.BetaOutputConfigParam{Effort: a.effort},
 	}
+	if req.Effort != "" {
+		params.OutputConfig.Effort = anthropic.BetaOutputConfigEffort(req.Effort)
+	}
 	if a.workspaceID != "" {
 		params.WorkspaceID = anthropic.String(a.workspaceID)
 	}

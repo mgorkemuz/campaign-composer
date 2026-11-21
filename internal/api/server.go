@@ -24,6 +24,7 @@ type Server struct {
 	webhookSecret string
 	metrics       Metrics
 	ring          func(topic string)
+	webDir        string
 
 	closing   chan struct{}
 	closeOnce sync.Once
@@ -39,6 +40,8 @@ type Options struct {
 	// WebhookSecret verifies the provider's signed delivery receipts.
 	WebhookSecret string
 	Metrics       Metrics
+	// WebDir holds the built frontend; empty serves no UI.
+	WebDir string
 	// Ring wakes a campaign's live streams after a receipt; throttled in
 	// production (delivery.Sender.Ring). Default: an unthrottled doorbell.
 	Ring      func(topic string)
@@ -60,7 +63,8 @@ func New(pool *pgxpool.Pool, log *slog.Logger, opts Options) *Server {
 		}
 	}
 	return &Server{pool: pool, log: log, hub: opts.Hub, now: opts.Now, campaigns: opts.Campaigns,
-		webhookSecret: opts.WebhookSecret, metrics: opts.Metrics, ring: opts.Ring, closing: make(chan struct{})}
+		webhookSecret: opts.WebhookSecret, metrics: opts.Metrics, ring: opts.Ring, webDir: opts.WebDir,
+		closing: make(chan struct{})}
 }
 
 // CloseStreams ends open event streams. http.Server.Shutdown waits for active
@@ -91,6 +95,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/campaigns/{id}/content", s.handleSetContent)
 	mux.HandleFunc("GET /api/campaigns/{id}/events", s.handleCampaignEvents)
 	mux.HandleFunc("POST /api/campaigns/{id}/approve", s.handleApprove)
+	mux.HandleFunc("POST /api/campaigns/{id}/resend", s.handleResend)
+	mux.HandleFunc("GET /api/deliveries/recent", s.handleRecentGrid)
 	mux.HandleFunc("GET /api/campaigns/{id}/deliveries", s.handleListDeliveries)
 	mux.HandleFunc("GET /api/campaigns/{id}/deliveries/counts", s.handleDeliveryCounts)
 
@@ -103,6 +109,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
 	})
+	if s.webDir != "" {
+		// "/" for every method: "GET /" would conflict with "/api/" in the router.
+		mux.Handle("/", webHandler(s.webDir))
+	}
 
 	return s.recoverPanics(s.logRequests(mux))
 }

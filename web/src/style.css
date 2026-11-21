@@ -1,0 +1,97 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* Design tokens taken from my earlier project (shadcn neutral with a warm tint),
+   plus a status palette for the pixel delivery grid built from its chart blues. */
+
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-st-queued: var(--st-queued);
+  --color-st-active: var(--st-active);
+  --color-st-sent: var(--st-sent);
+  --color-st-delivered: var(--st-delivered);
+  --color-st-failed: var(--st-failed);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.965 0.004 85);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.965 0.004 85);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.965 0.004 85);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.92 0.004 85);
+  --input: oklch(0.92 0.004 85);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+
+  /* Delivery status colours (the pixel grid and status badges). */
+  --st-queued: oklch(0.92 0.004 85);      /* waiting: the border grey */
+  --st-active: oklch(0.82 0.16 85);       /* sending / retrying: yellow */
+  --st-sent: oklch(0.623 0.214 259.815);  /* accepted by the provider: chart blue */
+  --st-delivered: oklch(0.32 0.12 265);   /* receipt says delivered: deep navy */
+  --st-failed: oklch(0.58 0.22 27);       /* undelivered / failed: destructive red */
+
+  color-scheme: light;
+}
+
+html,
+body {
+  overflow-x: clip; /* the full-bleed hero uses 100vw; clip (not hidden) keeps the sticky header working */
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* A fine, faint grid behind everything, echoing the pixel accent. */
+  background-image:
+    linear-gradient(to right, oklch(0.94 0.004 85 / 45%) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.94 0.004 85 / 45%) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+
+/* Tailwind v4 resets buttons to the default arrow; anything clickable gets a hand. */
+button:not(:disabled),
+[role="button"],
+select:not(:disabled),
+summary {
+  cursor: pointer;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

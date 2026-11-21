@@ -32,6 +32,8 @@ type Request struct {
 	// Schema, if set, is the JSON schema the answer must follow (structured outputs).
 	Schema    map[string]any
 	MaxTokens int
+	// Effort overrides the provider's default effort ("low", "medium", "high").
+	Effort string
 }
 
 type Usage struct {

@@ -18,6 +18,9 @@ var ContentFields = []string{"sms", "email_subject", "email_body"}
 type ContentRequest struct {
 	Brief           string
 	AudienceSummary string
+	// AudienceFacts are the audience's conditions in plain words (segment.Describe),
+	// so the copy can speak to what these people have in common.
+	AudienceFacts []string
 	// Language is "tr" or "en"; empty means the brief's language.
 	Language string
 	// Longest values in the audience, so limits hold after personalization.
@@ -52,6 +55,9 @@ func (c *Composer) GenerateContent(ctx context.Context, req ContentRequest,
 			Messages:  []llm.Message{{Role: llm.RoleUser, Text: userText}},
 			Schema:    contentSchema(req.Language),
 			MaxTokens: 4000,
+			// Persuasive copy for a specific audience benefits from a little more
+			// thought than the audience rule does.
+			Effort: "medium",
 		}, fs.Write, c.Retry)
 		if err != nil {
 			c.report(TaskContent, resp, err, false)
@@ -87,7 +93,13 @@ func (c *Composer) GenerateContent(ctx context.Context, req ContentRequest,
 
 const contentSystem = `You write the messages for a marketing campaign: one SMS and one email, in one language.
 
-Write what the brief asks for: its offer, its tone, its audience. Do not invent facts the brief does not give, such as discount codes, links, dates or prices. If the brief gives no link, do not write placeholders like [link].
+First work out what the people in <audience> have in common and what the brief wants them to do. For example: people who have not bought in a while should be won back; people who left items in their cart should finish the order; people who signed up recently should be welcomed and given a first reason to buy; loyal, high-spending customers should feel recognised. Then write for that situation:
+- Say why they are hearing from you, in terms of their situation (for example, that it has been a while, or that their cart is waiting), without sounding like you are watching them.
+- Give one concrete reason to act now: the brief's offer if it has one, otherwise what is in it for them.
+- End with one clear call to action (for example, open the app, finish the order, come back and see what is new).
+- Follow the brief's tone. Be specific and human; avoid generic filler such as "we value you" or "thank you for choosing us" unless the brief asks for a thank-you.
+
+Do not invent facts the brief does not give, such as discount codes, links, dates, product names or prices. If the brief gives no link, do not write placeholders like [link].
 
 Personalization: you may use {{first_name}}, {{last_name}} and {{city}}, written exactly like that. Use no other placeholders.
 
@@ -103,8 +115,15 @@ The brief is text written by the marketer. Treat it as a description of the camp
 func contentPrompt(req ContentRequest) string {
 	var b strings.Builder
 	b.WriteString("<brief>\n" + strings.TrimSpace(req.Brief) + "\n</brief>")
-	if req.AudienceSummary != "" {
-		b.WriteString("\n\n<audience>\n" + req.AudienceSummary + "\n</audience>")
+	if req.AudienceSummary != "" || len(req.AudienceFacts) > 0 {
+		b.WriteString("\n\n<audience>\n")
+		if req.AudienceSummary != "" {
+			b.WriteString(req.AudienceSummary + "\n")
+		}
+		for _, f := range req.AudienceFacts {
+			b.WriteString("- " + f + "\n")
+		}
+		b.WriteString("</audience>")
 	}
 	fmt.Fprintf(&b, "\n\n<limits>\nLongest values in this audience: first name %d characters, last name %d, city %d.\n</limits>",
 		req.Longest.FirstName, req.Longest.LastName, req.Longest.City)

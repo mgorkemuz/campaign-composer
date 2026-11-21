@@ -117,24 +117,25 @@ func names(evs []sseEvent) []string {
 	return out
 }
 
-func readyAudience(t *testing.T, ts *httptest.Server) string {
+// startCampaign creates a campaign, opens its event stream, and generates the
+// audience, which also queues the messages.
+func startCampaign(t *testing.T, ts *httptest.Server) (string, <-chan sseEvent) {
 	t.Helper()
 	id := createCampaign(t, ts)
-	if status, res := call(t, "POST", ts.URL+"/api/campaigns/"+id+"/audience", ""); status != 200 {
+	stream := openStream(t, ts.URL+"/api/campaigns/"+id+"/events")
+	status, res := call(t, "POST", ts.URL+"/api/campaigns/"+id+"/audience", "")
+	if status != 200 {
 		t.Fatalf("audience: %d %v", status, res)
 	}
-	return id
+	if state := res["campaign"].(map[string]any)["content_state"]; state != "generating" {
+		t.Fatalf("content_state after the audience = %v; messages should start on their own", state)
+	}
+	return id, stream
 }
 
 func TestContentStreamsAndSaves(t *testing.T) {
 	ts, _ := contentServer(t, llmtest.New(llmtest.Text(claudeAnswer), llmtest.Text(contentAnswer)))
-	id := readyAudience(t, ts)
-	stream := openStream(t, ts.URL+"/api/campaigns/"+id+"/events")
-
-	status, c := call(t, "POST", ts.URL+"/api/campaigns/"+id+"/content", `{}`)
-	if status != http.StatusAccepted || c["content_state"] != "generating" {
-		t.Fatalf("start: %d %v", status, c)
-	}
+	id, stream := startCampaign(t, ts) // no second request: the messages follow the audience
 	seen := waitEvent(t, stream, "content_ready")
 
 	var sms strings.Builder
@@ -143,7 +144,7 @@ func TestContentStreamsAndSaves(t *testing.T) {
 			sms.WriteString(ev.data["text"].(string))
 		}
 	}
-	_, c = call(t, "GET", ts.URL+"/api/campaigns/"+id, "")
+	_, c := call(t, "GET", ts.URL+"/api/campaigns/"+id, "")
 	if c["status"] != "content_ready" || c["content_state"] != "ready" || c["language"] != "en" {
 		t.Fatalf("campaign after generation: %v", c)
 	}
@@ -158,9 +159,7 @@ func TestContentStreamsAndSaves(t *testing.T) {
 func TestContentFailureIsRecorded(t *testing.T) {
 	bad := strings.Replace(contentAnswer, "{{first_name}}, your", "{{nickname}}, your", 1)
 	ts, _ := contentServer(t, llmtest.New(llmtest.Text(claudeAnswer), llmtest.Text(bad), llmtest.Text(bad)))
-	id := readyAudience(t, ts)
-	stream := openStream(t, ts.URL+"/api/campaigns/"+id+"/events")
-	call(t, "POST", ts.URL+"/api/campaigns/"+id+"/content", "")
+	id, stream := startCampaign(t, ts)
 
 	seen := waitEvent(t, stream, "content_failed")
 	if code := seen[len(seen)-1].data["data"].(map[string]any)["code"]; code != "llm_invalid_output" {
@@ -173,8 +172,10 @@ func TestContentFailureIsRecorded(t *testing.T) {
 }
 
 func TestHandEditedContent(t *testing.T) {
+	// The automatic generation fails (no scripted answer); a hand edit still works.
 	ts, _ := contentServer(t, llmtest.New(llmtest.Text(claudeAnswer)))
-	id := readyAudience(t, ts)
+	id, stream := startCampaign(t, ts)
+	waitEvent(t, stream, "content_failed")
 
 	status, res := call(t, "PUT", ts.URL+"/api/campaigns/"+id+"/content",
 		`{"language":"tr","sms":"Merhaba {{nickname}}","email_subject":"Selam","email_body":"Merhaba"}`)
@@ -226,18 +227,16 @@ func TestNewestGenerationWins(t *testing.T) {
 	older := strings.Replace(contentAnswer, "misses you", "OLDER", 1)
 	fake := llmtest.New(llmtest.Text(claudeAnswer), llmtest.Wait(release, llmtest.Text(older)), llmtest.Text(contentAnswer))
 	ts, _ := contentServer(t, fake)
-	id := readyAudience(t, ts)
-	stream := openStream(t, ts.URL+"/api/campaigns/"+id+"/events")
+	id, stream := startCampaign(t, ts) // the automatic generation is the one that waits
 
-	call(t, "POST", ts.URL+"/api/campaigns/"+id+"/content", "")
-	for len(fake.Requests()) < 2 { // the first generation is now waiting
+	for len(fake.Requests()) < 2 {
 		time.Sleep(10 * time.Millisecond)
 	}
 	// While it waits, the audience is locked...
 	if status, res := call(t, "POST", ts.URL+"/api/campaigns/"+id+"/audience", ""); status != 409 || res["error"].(map[string]any)["code"] != "generating" {
 		t.Fatalf("audience during generation: %d %v", status, res)
 	}
-	// ...and a second request supersedes it.
+	// ...and asking again (e.g. "Rewrite") supersedes it.
 	call(t, "POST", ts.URL+"/api/campaigns/"+id+"/content", "")
 	waitEvent(t, stream, "content_ready")
 	close(release)

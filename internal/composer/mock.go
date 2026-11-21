@@ -170,6 +170,7 @@ func mockContent(brief, language string) string {
 		discount = m[1] + m[2]
 	}
 	cart := containsAny(lower, cartWords)
+	lapsed := !cart && containsAny(lower, notBought)
 
 	var sms, subject, body string
 	if language == "tr" {
@@ -177,7 +178,11 @@ func mockContent(brief, language string) string {
 		if discount != "" {
 			offer = "%" + discount + " indirim seni bekliyor"
 		}
-		if cart {
+		if lapsed {
+			sms = "Merhaba {{first_name}}, seni özledik! Son ziyaretinden bu yana yeni ürünler geldi ve " + offer + ". Uygulamaya göz at."
+			subject = "{{first_name}}, seni yeniden görmek isteriz"
+			body = "Merhaba {{first_name}},\n\nBir süredir uğramadın; bu arada senin için yeni ürünler ekledik. Üstelik " + offer + ".\n\nNeler değiştiğini görmek için uygulamayı açman yeterli.\n\nSevgiler,\nEkip"
+		} else if cart {
 			sms = "Merhaba {{first_name}}, sepetindeki ürünler hâlâ seni bekliyor ve " + offer + "! Alışverişini bugün tamamla."
 			subject = "{{first_name}}, sepetin seni bekliyor"
 			body = "Merhaba {{first_name}},\n\nSepetine eklediğin ürünler hâlâ seni bekliyor. Üstelik " + offer + ".\n\nAlışverişini tamamlamak için uygulamaya göz atman yeterli.\n\nSevgiler,\nEkip"
@@ -191,7 +196,11 @@ func mockContent(brief, language string) string {
 		if discount != "" {
 			offer = discount + "% off is waiting for you"
 		}
-		if cart {
+		if lapsed {
+			sms = "Hi {{first_name}}, we've missed you! There's plenty new since your last visit and " + offer + ". Open the app to take a look."
+			subject = "{{first_name}}, come see what's new"
+			body = "Hi {{first_name}},\n\nIt's been a while, and a lot has changed since your last visit. And " + offer + ".\n\nOpen the app to see what's new.\n\nBest,\nThe team"
+		} else if cart {
 			sms = "Hi {{first_name}}, the items in your cart are still waiting and " + offer + "! Finish your order today."
 			subject = "{{first_name}}, your cart is waiting"
 			body = "Hi {{first_name}},\n\nThe items you added to your cart are still waiting for you. And " + offer + ".\n\nOpen the app to finish your order.\n\nBest,\nThe team"

@@ -480,3 +480,122 @@ func maxThroughput(progress []sseEvent) float64 {
 	}
 	return peak
 }
+
+func TestResendFailedIsANewExactlyOnceRound(t *testing.T) {
+	env := sendingServer(t, mockprovider.Config{
+		LatencyMax: 2 * time.Millisecond, WebhookDelayMin: 10 * time.Millisecond, WebhookDelayMax: 40 * time.Millisecond,
+		DeliveredRate: 0.6, Seed: 5,
+	}, nil, 150)
+	ctx := context.Background()
+	id := readyCampaign(t, env.api.URL, "Trabzon")
+	call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", "")
+
+	// Not while sending.
+	if status, res := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/resend", ""); status != 409 {
+		t.Fatalf("resend while sending: %d %v, want 409", status, res)
+	}
+	settled := func() {
+		waitUntil(t, "sending and receipts to finish", 60*time.Second, func() bool {
+			var c campaignState
+			env.pool.QueryRow(ctx, `SELECT c.status, (SELECT count(*) FROM deliveries d WHERE d.campaign_id = c.id AND d.status IN ('queued','sending','retrying','sent'))
+				FROM campaigns c WHERE c.id = $1`, id).Scan(&c.status, &c.open)
+			return c.status == "completed" && c.open == 0
+		})
+	}
+	settled()
+
+	var undelivered, permanent int
+	env.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status = 'undelivered'), count(*) FILTER (WHERE status = 'failed' AND permanent)
+		FROM deliveries WHERE campaign_id = $1`, id).Scan(&undelivered, &permanent)
+	if undelivered == 0 {
+		t.Fatal("no undelivered messages to resend; raise the undelivered rate")
+	}
+
+	status, res := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/resend", "")
+	if status != 200 || int(res["resent"].(float64)) != undelivered {
+		t.Fatalf("resend: %d %v; want %d resent (permanent failures skipped: %d)", status, res, undelivered, permanent)
+	}
+	settled()
+
+	accepted := env.provider.Accepted()
+	rows, _ := env.pool.Query(ctx, `SELECT id, resend_count, status, permanent FROM deliveries WHERE campaign_id = $1`, id)
+	resent := 0
+	for rows.Next() {
+		var did int64
+		var round int
+		var st string
+		var perm bool
+		rows.Scan(&did, &round, &st, &perm)
+		first, again := strconv.FormatInt(did, 10), strconv.FormatInt(did, 10)+".1"
+		switch {
+		case perm:
+			if round != 0 || accepted[first] != 0 || accepted[again] != 0 {
+				t.Errorf("permanent failure %d was sent (round %d)", did, round)
+			}
+		case round == 1:
+			resent++
+			if accepted[first] != 1 || accepted[again] != 1 {
+				t.Errorf("resent delivery %d: first round accepted %d times, resend %d times; want 1 and 1", did, accepted[first], accepted[again])
+			}
+		default:
+			if accepted[first] != 1 || accepted[again] != 0 {
+				t.Errorf("delivery %d (not resent): accepted %d / %d", did, accepted[first], accepted[again])
+			}
+		}
+	}
+	rows.Close()
+	if resent != undelivered || env.provider.Stats().DuplicateAccept != 0 {
+		t.Fatalf("resent %d of %d undelivered; provider duplicates %d", resent, undelivered, env.provider.Stats().DuplicateAccept)
+	}
+}
+
+type campaignState struct {
+	status string
+	open   int
+}
+
+func TestReceiptFromAnEarlierRoundIsIgnored(t *testing.T) {
+	rec := &recorder{calls: map[string][]time.Time{}}
+	env := sendingServer(t, mockprovider.Config{}, rec, 1000)
+	id := readyCampaign(t, env.api.URL, "Trabzon")
+	call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", "")
+	waitUntil(t, "sending to finish", 30*time.Second, func() bool {
+		_, c := call(t, "GET", env.api.URL+"/api/campaigns/"+id, "")
+		return c["status"] == "completed"
+	})
+	ctx := context.Background()
+	var did int64
+	env.pool.QueryRow(ctx, `SELECT id FROM deliveries WHERE campaign_id = $1 AND status = 'sent' LIMIT 1`, id).Scan(&did)
+	// Pretend this delivery was resent and the new round is waiting for its receipt.
+	env.pool.Exec(ctx, `UPDATE deliveries SET resend_count = 1, provider_message_id = 'msg-round-1' WHERE id = $1`, did)
+	ref := strconv.FormatInt(did, 10)
+	receipt := func(reference string) map[string]any {
+		return map[string]any{"message_id": "msg-round-1", "reference": reference, "channel": "sms", "status": "delivered", "timestamp": time.Now()}
+	}
+
+	if _, body := postReceipt(t, env.api.URL, receipt(ref), webhookSecret, time.Now()); body["applied"] != false {
+		t.Fatalf("a round-0 receipt changed the round-1 delivery: %v", body)
+	}
+	if _, body := postReceipt(t, env.api.URL, receipt(ref+".1"), webhookSecret, time.Now()); body["applied"] != true {
+		t.Fatalf("the round-1 receipt was not applied: %v", body)
+	}
+}
+
+func TestRecentGrid(t *testing.T) {
+	rec := &recorder{calls: map[string][]time.Time{}}
+	env := sendingServer(t, mockprovider.Config{}, rec, 1000)
+	if _, body := call(t, "GET", env.api.URL+"/api/deliveries/recent", ""); body["grid"] != "" {
+		t.Fatalf("before any campaign: %v", body)
+	}
+	id := readyCampaign(t, env.api.URL, "Trabzon")
+	call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", "")
+	waitUntil(t, "sending to finish", 30*time.Second, func() bool {
+		_, c := call(t, "GET", env.api.URL+"/api/campaigns/"+id, "")
+		return c["status"] == "completed"
+	})
+	_, body := call(t, "GET", env.api.URL+"/api/deliveries/recent?limit=50", "")
+	grid := body["grid"].(string)
+	if len(grid) != 50 || strings.Trim(grid, "tf") != "" {
+		t.Fatalf("grid = %q; want 50 codes, all sent (t) or failed (f)", grid)
+	}
+}

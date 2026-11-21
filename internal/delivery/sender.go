@@ -74,18 +74,19 @@ func (s *Sender) Handle(ctx context.Context, job queue.Job) error {
 	}
 	var (
 		status, channel, campaignID string
+		round                       int
 		r                           message.Recipient
 		phone, email                string
 		content                     message.Content
 	)
 	err := s.pool.QueryRow(ctx, `
-		SELECT d.status, d.channel, d.campaign_id::text,
+		SELECT d.status, d.channel, d.campaign_id::text, d.resend_count,
 		       u.first_name, u.last_name, u.city, u.phone, u.email,
 		       c.sms_body, c.email_subject, c.email_body
 		FROM deliveries d
 		JOIN users u ON u.id = d.user_id
 		JOIN campaigns c ON c.id = d.campaign_id
-		WHERE d.id = $1`, p.DeliveryID).Scan(&status, &channel, &campaignID,
+		WHERE d.id = $1`, p.DeliveryID).Scan(&status, &channel, &campaignID, &round,
 		&r.FirstName, &r.LastName, &r.City, &phone, &email,
 		&content.SMS, &content.EmailSubject, &content.EmailBody)
 	if err != nil {
@@ -102,8 +103,8 @@ func (s *Sender) Handle(ctx context.Context, job queue.Job) error {
 	}
 	s.ringer.ring(campaignTopic(campaignID))
 
-	m := Message{Channel: channel, Reference: strconv.FormatInt(p.DeliveryID, 10),
-		IdempotencyKey: fmt.Sprintf("delivery-%d", p.DeliveryID)}
+	m := Message{Channel: channel, Reference: Reference(p.DeliveryID, round),
+		IdempotencyKey: "delivery-" + Reference(p.DeliveryID, round)}
 	if channel == "sms" {
 		m.To, m.Body = phone, message.Render(content.SMS, r)
 	} else {
@@ -133,7 +134,7 @@ func (s *Sender) Handle(ctx context.Context, job queue.Job) error {
 
 	var pe *ProviderError
 	if errors.As(err, &pe) && !pe.Temporary() {
-		s.markFailed(ctx, p.DeliveryID, campaignID, channel, err)
+		s.markFailed(ctx, p.DeliveryID, campaignID, channel, err, true)
 		return queue.Permanent(err)
 	}
 	if _, uerr := s.pool.Exec(ctx, `
@@ -159,17 +160,19 @@ func (s *Sender) OnFailed(ctx context.Context, job queue.Job, err error) {
 		Scan(&campaignID, &channel) != nil {
 		return
 	}
-	s.markFailed(ctx, p.DeliveryID, campaignID, channel, err)
+	s.markFailed(ctx, p.DeliveryID, campaignID, channel, err, false)
 }
 
-func (s *Sender) markFailed(ctx context.Context, id int64, campaignID, channel string, cause error) {
+// markFailed records a delivery the pipeline gave up on. permanent means the
+// provider rejected it for good, so a resend would not help.
+func (s *Sender) markFailed(ctx context.Context, id int64, campaignID, channel string, cause error, permanent bool) {
 	// A receipt that already said delivered wins over our own give-up: the
 	// provider knows best whether the message arrived. An already failed row is
 	// left alone: the handler and the queue's OnFailed both report the same
 	// permanent failure, and it must be counted once.
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE deliveries SET status = 'failed', last_error = $2, updated_at = now()
-		WHERE id = $1 AND status NOT IN ('sent', 'delivered', 'undelivered', 'failed')`, id, cause.Error())
+		UPDATE deliveries SET status = 'failed', last_error = $2, permanent = $3, updated_at = now()
+		WHERE id = $1 AND status NOT IN ('sent', 'delivered', 'undelivered', 'failed')`, id, cause.Error(), permanent)
 	if err != nil {
 		s.log.Error("mark delivery failed", "delivery", id, "error", err)
 		return
@@ -177,6 +180,15 @@ func (s *Sender) markFailed(ctx context.Context, id int64, campaignID, channel s
 	if tag.RowsAffected() == 1 {
 		s.finished(ctx, campaignID, channel, StatusFailed)
 	}
+}
+
+// Reference is what the provider echoes back in receipts: the delivery ID, plus
+// ".<round>" for resends ("123", "123.1"). Round 0 keeps the plain ID.
+func Reference(id int64, round int) string {
+	if round == 0 {
+		return strconv.FormatInt(id, 10)
+	}
+	return fmt.Sprintf("%d.%d", id, round)
 }
 
 // Ring wakes a topic's listeners, throttled (see ringer).

@@ -30,7 +30,20 @@ func (s *Service) GenerateAudience(ctx context.Context, id string) (AudienceResu
 	if err != nil {
 		return AudienceResult{}, err
 	}
-	return s.saveAudience(ctx, c, aud.Rule, aud.Summary, aud.Assumptions, aud.Model)
+	res, err := s.saveAudience(ctx, c, aud.Rule, aud.Summary, aud.Assumptions, aud.Model)
+	if err != nil {
+		return res, err
+	}
+	// The brief already says who and what, so there is nothing to approve in
+	// between: queue the messages right away. Doing it here rather than in the
+	// browser means the campaign reaches "ready to send" even if the page is
+	// closed or stale.
+	if res.Campaign.SMS == "" && res.Campaign.ContentState != ContentGenerating {
+		if res.Campaign, err = s.StartContent(ctx, id, "", ""); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
 }
 
 // RefineAudience changes the current rule following an instruction.
@@ -100,16 +113,18 @@ func (s *Service) saveAudience(ctx context.Context, c Campaign, rule segment.Rul
 			return err
 		}
 
+		longest, err := s.longest(ctx, tx, rule)
+		if err != nil {
+			return err
+		}
+		longestJSON, _ := json.Marshal(longest)
+
 		status, contentState := StatusAudienceReady, c.ContentState
 		var contentError, contentCheck any // nil writes NULL
 		if len(c.ContentError) > 0 {
 			contentError = string(c.ContentError) // no messages to re-check: keep the last error
 		}
 		if c.SMS != "" && c.Language != nil {
-			longest, err := s.longest(ctx, tx, rule)
-			if err != nil {
-				return err
-			}
 			check, problems := message.Validate(message.Content{Language: *c.Language, SMS: c.SMS,
 				EmailSubject: c.EmailSubject, EmailBody: c.EmailBody}, longest)
 			contentCheck, _ = json.Marshal(check)
@@ -127,11 +142,11 @@ func (s *Service) saveAudience(ctx context.Context, c Campaign, rule segment.Rul
 			UPDATE campaigns SET status = $2, rule = $3, audience_summary = $4, audience_assumptions = $5,
 				audience_total = $6, sms_reachable = $7, email_reachable = $8, llm_model = $9,
 				content_state = $10, content_error = $11, content_check = coalesce($12, content_check),
-				updated_at = now()
+				audience_longest = $14, updated_at = now()
 			WHERE id = $1 AND status = ANY($13) AND content_state <> 'generating'`,
 			c.ID, status, ruleJSON, summary, assumptions,
 			p.Total, p.SMSReachable, p.EmailReachable, model,
-			contentState, contentError, contentCheck, audienceEditable)
+			contentState, contentError, contentCheck, audienceEditable, longestJSON)
 		if err != nil {
 			return store.MapErr(err)
 		}
