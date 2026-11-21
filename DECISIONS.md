@@ -28,7 +28,7 @@ The infrastructure was ported from my own projects and adapted:
 - **JSON Schema validator.**
 - **Event hub and SSE stream:** generalised from "agent runs" to any topic.
 - **Lease-based queue pattern.**
-- **LLM interface and retry:** planned next.
+- **LLM interface and retry:** a small `Provider` interface over the SDK, with retry on 429/5xx and `Retry-After`.
 
 What changed in the port, and why:
 
@@ -80,8 +80,8 @@ What changed in the port, and why:
   streams.
 - **JSON comes from structured outputs** (`output_config.format`), not a forced tool call. Newer models reject
   forced `tool_choice`, and structured outputs keep the answer's shape fixed.
-- **The backend validates what the schema can't express:** known fields and values, number ranges, and later
-  message lengths.
+- **The backend validates what the schema can't express:** known fields and values, number ranges, and message
+  lengths.
 - **One retry policy.** The SDK's own retries are off, and ours retries 429/5xx/529 with backoff and jitter,
   honoring `Retry-After`. Errors after text has streamed are never retried, so an answer is never shown twice.
 - **One repair round.** If the answer fails validation, Claude gets one fresh request with the rejected answer and
@@ -106,8 +106,9 @@ What changed in the port, and why:
 
 ## Messages
 
-- **One language per campaign**, `tr` or `en`. By default the model uses the brief's language. If the marketer
-  picks one, the schema's `language` enum is narrowed to it, so the model cannot answer in another.
+- **The campaign is written in one language**, `tr` or `en`. By default the model uses the brief's language. If
+  the marketer picks one, the schema's `language` enum is narrowed to it, so the model cannot answer in another.
+  Users who speak the other language get a translation (see [Bonus features](#bonus-features)).
 - **Limits are checked after personalization against this audience,** not the template alone. The backend reads
   the longest first name, last name and city among the matched users and renders the worst case. An SMS that fits
   for "Ankara" can be too long for "Eskişehir". Changing the audience re-checks existing messages: they become
@@ -225,8 +226,8 @@ What changed in the port, and why:
   goes through the same server validation, and errors come back with the full list of problems.
 - **One decision: send.** The audience is already in the brief, so asking the marketer to approve it again added a
   click and no information. After the brief, the app builds the audience and writes the messages without stopping.
-  The marketer lands on a single "Ready to send" page with Edit buttons, and "Send" (with a confirm showing the
-  exact count) is the only approval.
+  The marketer lands on a single "Ready to send" page with Edit buttons, and "Send to N" is the only approval: one
+  click. The button carries the exact count, so a second "Are you sure?" step added a click and no information.
 - **Screens:** Brief → Preparing (automatic, shows each step and the SMS streaming in) → Ready to send → Live. A
   small step indicator runs across the top, with as little text as possible; editing is behind "Edit".
 - **The server chains the steps, not the browser.** When the AI finishes an audience and the campaign has no

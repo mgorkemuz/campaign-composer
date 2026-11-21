@@ -1,5 +1,9 @@
 # Build plan
 
+> **Status: complete.** This is the plan as written before coding, kept for reference. Phases 0–8 and the
+> chosen bonus items (scheduled sending, CI, per-user language) are done; A/B variants were dropped. Where the
+> build differs from the plan, [DECISIONS.md](../DECISIONS.md) and the README describe what was built.
+
 The core flow comes first: brief → audience → messages → approval → sending → live dashboard. Every phase ends
 with passing tests and something that runs. Bonus features start only after the core flow works end to end in
 `docker compose up`.
@@ -142,7 +146,7 @@ users.
   - With no API key, the app uses a keyword-based mock composer, so the demo works without a key.
   - With a key, the real Claude is used.
 
-## Frontend (Vue 3, Vite, TypeScript, Tailwind v4, shadcn-vue, oriorai's design tokens and fonts)
+## Frontend (Vue 3, Vite, TypeScript, Tailwind v4, shadcn-vue, design tokens and fonts from my earlier project)
 
 1. **Campaign list:** status, audience size, sent and failed counts.
 2. **Composer (stepper):**
@@ -151,11 +155,11 @@ users.
      condition, and a "refine" box.
    - Messages: a phone mock-up for the SMS and an email card, filled as they stream; character and segment
      counters; variables highlighted; preview as a sample user.
-   - Approve: a confirmation showing exact counts.
+   - Approve: a confirmation showing exact counts. (Built as one "Send to N" button carrying the count.)
 3. **Dashboard (live):** progress per channel, counts by status, throughput, retries, and a table of failed
    deliveries with their errors.
 
-**Visual direction.** oriorai's components and tokens on a white background, with thin grid lines and a bold
+**Visual direction.** My earlier project's components and tokens on a white background, with thin grid lines and a bold
 sans-serif display font for big headings. One pixel-art accent that carries data rather than decoration:
 
 - **Delivery grid:** one square per delivery, coloured by status, filling in live:
@@ -206,7 +210,7 @@ If time gets short, cut in this order: A/B variants, frontend tests, chip editin
 ## Decisions taken
 
 1. **One language per campaign.** Copy is written in the brief's language by default, and the marketer can pick
-   another. Sending each user their own language stays a bonus item.
+   another. Sending each user their own language stays a bonus item. (Later built: one translation per language.)
 2. **Audience editing:** edit values or remove conditions on the rule chips, plus a "refine" box that sends an
    instruction back to Claude with the current rule. Every edit goes through the same validation.
 3. **Delivery status comes from provider webhooks.** Statuses: `queued`, `sending`, `retrying`, `sent`

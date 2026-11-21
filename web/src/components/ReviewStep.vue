@@ -20,7 +20,6 @@ const instruction = ref('')
 const busy = ref<'' | 'audience' | 'send'>('')
 const error = ref<ApiError | null>(null)
 const sendError = ref<ApiError | null>(null)
-const confirming = ref(false)
 // "Send now" or "schedule": the picker holds a local date-time string.
 const scheduling = ref(false)
 const sendAtLocal = ref(defaultSendAt())
@@ -76,7 +75,6 @@ async function send() {
     emit('sent', res.campaign)
   } catch (e) {
     sendError.value = e instanceof ApiError ? e : new ApiError(0, 'error', 'Could not send.')
-    confirming.value = false
     busy.value = ''
   }
 }
@@ -180,16 +178,12 @@ async function send() {
           <template v-else>Fix the messages before sending.</template>
         </p>
         <div class="flex flex-wrap items-center justify-end gap-2">
-          <input v-if="scheduling && !confirming" v-model="sendAtLocal" type="datetime-local" aria-label="Send at"
+          <input v-if="scheduling" v-model="sendAtLocal" type="datetime-local" aria-label="Send at"
             class="h-9 rounded-lg border border-input bg-background px-2 text-sm" />
-          <Button v-if="!confirming" variant="ghost" :disabled="!ready" :aria-pressed="scheduling" @click="scheduling = !scheduling">
+          <Button variant="ghost" :disabled="!ready || busy === 'send'" :aria-pressed="scheduling" @click="scheduling = !scheduling">
             <CalendarClock class="size-4" /> {{ scheduling ? 'Send now instead' : 'Schedule' }}
           </Button>
-          <Button v-if="confirming" variant="ghost" :disabled="busy === 'send'" @click="confirming = false">Cancel</Button>
-          <Button v-if="confirming" :loading="busy === 'send'" @click="send">
-            <Send class="size-4" /> {{ scheduling ? `Yes, schedule for ${sendAtLabel}` : `Yes, send ${total.toLocaleString()}` }}
-          </Button>
-          <Button v-else :disabled="!ready || (scheduling && !sendAtLocal)" @click="confirming = true">
+          <Button :loading="busy === 'send'" :disabled="!ready || (scheduling && !sendAtLocal)" @click="send">
             <CalendarClock v-if="scheduling" class="size-4" /><Send v-else class="size-4" />
             {{ scheduling ? `Schedule for ${sendAtLabel}` : `Send to ${total.toLocaleString()}` }}
           </Button>
