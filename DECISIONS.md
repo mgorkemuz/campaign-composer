@@ -175,6 +175,27 @@ What changed in the port, and why:
   variable. In Docker, a 2,623-message campaign finished in about 24 s with 0 duplicates, and the 14 failures were
   exactly the malformed contacts.
 
+## Live delivery progress
+
+- **Progress is computed, not stored per change.** Workers only ring a throttled doorbell (≤ 4/s per campaign).
+  The stream then sends a `progress` snapshot at most every 500 ms, with a trailing send so the final state always
+  arrives. 10,000 status changes therefore cost about two small queries a second per viewer, not 10,000 events.
+- **One query builds the snapshot:**
+  - counts per channel and status;
+  - throughput over the last 5 s;
+  - retries;
+  - receipts still pending;
+  - a **grid string**: one character per delivery in delivery order (`q s r t d u f`). The dashboard's pixel
+    grid draws one square per character. About 2,600 deliveries make a ~2.6 KB string, small enough to resend
+    whole each time instead of diffing.
+- **Stored events and snapshots share one SSE stream.** A reconnecting browser replays missed stored events from
+  `Last-Event-ID` and gets a fresh snapshot at once.
+- **The stream ends only when nothing more will change:** sending finished and every receipt in, with a 2-minute
+  grace period for receipts that never come. The "is it finished" check reads the cheap campaign status first and
+  builds the full snapshot only after sending is done.
+- **In Docker,** a 2,623-message campaign streamed 46 snapshots over 24 s, about 90 msg/s per channel at the
+  100/s limit, and the stream closed itself once the last receipt arrived.
+
 ## Models
 
 `claude-haiku-5-5` is the default: the tasks are short and structured.

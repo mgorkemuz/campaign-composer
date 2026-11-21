@@ -64,6 +64,9 @@ type Campaign struct {
 	ContentError json.RawMessage `json:"content_error"`
 	ContentCheck *message.Check  `json:"content_check"`
 
+	ApprovedAt  *time.Time `json:"approved_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -114,7 +117,7 @@ const selectCampaign = `
 	SELECT id::text, brief, status, rule, audience_summary, audience_assumptions,
 	       audience_total, sms_reachable, email_reachable, llm_model,
 	       language, sms_body, email_subject, email_body, content_state, content_error, content_check,
-	       created_at, updated_at
+	       approved_at, completed_at, created_at, updated_at
 	FROM campaigns`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -125,7 +128,7 @@ func scan(row scanner) (Campaign, error) {
 	err := row.Scan(&c.ID, &c.Brief, &c.Status, &rule, &c.AudienceSummary, &c.AudienceAssumptions,
 		&c.AudienceTotal, &c.SMSReachable, &c.EmailReachable, &c.LLMModel,
 		&c.Language, &c.SMS, &c.EmailSubject, &c.EmailBody, &c.ContentState, &c.ContentError, &c.ContentCheck,
-		&c.CreatedAt, &c.UpdatedAt)
+		&c.ApprovedAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return Campaign{}, store.MapErr(err)
 	}

@@ -108,7 +108,7 @@ func TestStreamReplaysThenFollowsLive(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
-		s.streamTopic(w, r, topic, func(context.Context) (bool, error) { return finished.Load(), nil })
+		s.streamTopic(w, r, topic, streamOptions{Finished: func(context.Context) (bool, error) { return finished.Load(), nil }})
 	})
 	streamSrv := httptest.NewServer(mux)
 	defer streamSrv.Close()

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"campaign-composer/internal/campaign"
 	"campaign-composer/internal/composer"
@@ -175,6 +176,8 @@ func (s *Server) handleSetContent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var errNoProgress = errors.New("no delivery progress yet")
+
 // handleCampaignEvents streams a campaign's events (status changes, message
 // text as it is written, later delivery progress) with server-sent events.
 func (s *Server) handleCampaignEvents(w http.ResponseWriter, r *http.Request) {
@@ -183,11 +186,27 @@ func (s *Server) handleCampaignEvents(w http.ResponseWriter, r *http.Request) {
 		s.storeError(w, r, err, "campaign")
 		return
 	}
-	s.streamTopic(w, r, campaign.Topic(id), func(ctx context.Context) (bool, error) {
-		c, err := s.campaigns.Get(ctx, id)
-		if err != nil {
-			return false, err
-		}
-		return c.Status == campaign.StatusCompleted || c.Status == campaign.StatusFailed, nil
+	s.streamTopic(w, r, campaign.Topic(id), streamOptions{
+		// The stream ends once nothing more will change: sending is done and the
+		// receipts are in (or stopped coming).
+		Finished: func(ctx context.Context) (bool, error) {
+			c, err := s.campaigns.Get(ctx, id) // cheap check first: runs on every doorbell
+			if err != nil || (c.Status != campaign.StatusCompleted && c.Status != campaign.StatusFailed) {
+				return false, err
+			}
+			p, err := s.campaigns.Progress(ctx, id)
+			if err != nil {
+				return false, err
+			}
+			return p.Settled(time.Now()), nil
+		},
+		Snapshot: func(ctx context.Context) (any, error) {
+			c, err := s.campaigns.Get(ctx, id)
+			if err != nil || c.ApprovedAt == nil {
+				return nil, errNoProgress // nothing to show before approval
+			}
+			return s.campaigns.Progress(ctx, id)
+		},
+		SnapshotEvery: 500 * time.Millisecond,
 	})
 }

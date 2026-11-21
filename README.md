@@ -4,7 +4,8 @@ A marketer describes a campaign in plain language. Claude turns it into a valida
 SMS/email copy. The marketer reviews and approves, and the system sends through a rate-limited queue to a mock
 provider while a dashboard shows delivery status live.
 
-> Status: Phases 0–5 done (infrastructure, mock data, segment engine, AI audience and messages, sending).
+> Status: Phases 0–6 done (infrastructure, mock data, segment engine, AI audience and messages, sending, live
+> progress). The Vue frontend is next.
 > See [docs/PLAN.md](docs/PLAN.md) for the phases.
 
 ## Quick start
@@ -41,7 +42,7 @@ docker compose up
 | `POST /api/campaigns/{id}/content` | Generate messages (streams to `/events`) |
 | `PUT /api/campaigns/{id}/content` | Save hand-edited messages |
 | `POST /api/campaigns/{id}/approve` | Queue one delivery per consenting recipient and channel |
-| `GET /api/campaigns/{id}/events` | Server-sent events: status, message text as it is written |
+| `GET /api/campaigns/{id}/events` | Server-sent events: status changes, message text as it is written, delivery progress (counts, throughput, pixel-grid data) |
 | `GET /api/campaigns/{id}/deliveries[/counts]` | Delivery list (filter by `status`) and counts |
 | `GET /api/segments/fields`, `POST /api/segments/preview` | Rule fields; preview counts for a rule |
 | `POST /webhooks/provider` | Signed delivery receipts from the provider |
@@ -52,6 +53,5 @@ To be written in full at the end. See [DECISIONS.md](DECISIONS.md) for the stack
 
 ## Not done yet
 
-- Delivery progress on the live event stream (phase 6)
 - The Vue frontend (phase 7)
 - Architecture write-up and session exports (phase 8)

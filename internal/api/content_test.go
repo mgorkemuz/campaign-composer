@@ -57,6 +57,7 @@ func contentServer(t *testing.T, fake *llmtest.Fake) (*httptest.Server, *pgxpool
 type sseEvent struct {
 	name string
 	data map[string]any
+	at   time.Time
 }
 
 // openStream starts reading a campaign's events into a channel.
@@ -80,7 +81,7 @@ func openStream(t *testing.T, url string) <-chan sseEvent {
 			if v, ok := strings.CutPrefix(line, "data: "); ok {
 				var data map[string]any
 				json.Unmarshal([]byte(v), &data)
-				ch <- sseEvent{name, data}
+				ch <- sseEvent{name, data, time.Now()}
 			}
 		}
 	}()

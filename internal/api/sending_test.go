@@ -388,3 +388,95 @@ func TestMetricsEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestProgressStream(t *testing.T) {
+	env := sendingServer(t, mockprovider.Config{
+		LatencyMax: 2 * time.Millisecond, WebhookDelayMin: 20 * time.Millisecond, WebhookDelayMax: 60 * time.Millisecond, Seed: 3,
+	}, nil, 60) // slow enough that sending spans a few seconds
+	id := readyCampaign(t, env.api.URL, "Trabzon")
+	stream := openStream(t, env.api.URL+"/api/campaigns/"+id+"/events")
+	time.Sleep(200 * time.Millisecond)
+	if status, res := call(t, "POST", env.api.URL+"/api/campaigns/"+id+"/approve", ""); status != 200 {
+		t.Fatalf("approve: %d %v", status, res)
+	}
+
+	var progress []sseEvent
+	for _, ev := range waitEventWithin(t, stream, "end", 60*time.Second) {
+		if ev.name == "progress" {
+			progress = append(progress, ev)
+		}
+	}
+	if len(progress) < 3 {
+		t.Fatalf("only %d progress events", len(progress))
+	}
+	// Throttled: at most one every 500 ms (the final one may follow sooner).
+	for i := 1; i < len(progress)-1; i++ {
+		if gap := progress[i].at.Sub(progress[i-1].at); gap < 400*time.Millisecond {
+			t.Errorf("progress events %d and %d only %s apart", i-1, i, gap)
+		}
+	}
+
+	final := progress[len(progress)-1].data
+	if final["status"] != "completed" || final["pending_receipts"].(float64) != 0 {
+		t.Fatalf("final progress: status=%v pending=%v", final["status"], final["pending_receipts"])
+	}
+	counts := final["counts"].(map[string]any)
+	grid := final["grid"].(map[string]any)
+	var dbTotal int
+	env.pool.QueryRow(context.Background(), `SELECT count(*) FROM deliveries WHERE campaign_id = $1`, id).Scan(&dbTotal)
+	gridTotal := 0
+	for _, ch := range delivery.Channels {
+		g := grid[ch].(string)
+		gridTotal += len(g)
+		perStatus := map[string]int{}
+		for _, c := range g {
+			if !strings.ContainsRune("du", c) && c != 'f' {
+				t.Fatalf("%s grid has %q after settling", ch, c)
+			}
+			perStatus[map[rune]string{'d': "delivered", 'u': "undelivered", 'f': "failed"}[c]]++
+		}
+		for st, n := range perStatus {
+			if int(counts[ch].(map[string]any)[st].(float64)) != n {
+				t.Errorf("%s %s: counts say %v, grid has %d", ch, st, counts[ch].(map[string]any)[st], n)
+			}
+		}
+	}
+	if gridTotal != dbTotal {
+		t.Fatalf("grid has %d squares, database %d deliveries", gridTotal, dbTotal)
+	}
+	if peak := maxThroughput(progress); peak > 61*2 {
+		t.Errorf("reported throughput %.0f/s exceeds the two channels' limits", peak)
+	}
+}
+
+func waitEventWithin(t *testing.T, ch <-chan sseEvent, want string, d time.Duration) []sseEvent {
+	t.Helper()
+	var seen []sseEvent
+	timeout := time.After(d)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatalf("stream closed before %q", want)
+			}
+			seen = append(seen, ev)
+			if ev.name == want {
+				return seen
+			}
+		case <-timeout:
+			t.Fatalf("no %q within %s; saw %d events", want, d, len(seen))
+		}
+	}
+}
+
+func maxThroughput(progress []sseEvent) float64 {
+	peak := 0.0
+	for _, ev := range progress {
+		sum := 0.0
+		for _, v := range ev.data["throughput"].(map[string]any) {
+			sum += v.(float64)
+		}
+		peak = max(peak, sum)
+	}
+	return peak
+}
