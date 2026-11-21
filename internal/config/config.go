@@ -27,7 +27,19 @@ type Config struct {
 	LogJSON bool
 	// SeedUsers is how many mock users to create when the users table is empty.
 	SeedUsers int
+
+	// ProviderURL is the SMS/email provider's API.
+	ProviderURL string
+	// WebhookSecret verifies the provider's signed delivery receipts.
+	WebhookSecret string
+	// SendRate is the maximum messages per second per channel.
+	SendRate float64
+	// SendWorkers is the number of concurrent senders per channel.
+	SendWorkers int
 }
+
+// DevWebhookSecret is used when WEBHOOK_SECRET is unset, for local runs only.
+const DevWebhookSecret = "dev-only-webhook-secret"
 
 // DefaultModel is cheap and fast enough for short structured tasks.
 const DefaultModel = "claude-haiku-5-5"
@@ -37,6 +49,7 @@ const DefaultModel = "claude-haiku-5-5"
 var keys = []string{
 	"PORT", "DATABASE_URL", "DATA_DIR", "LOG_FORMAT",
 	"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_WORKSPACE_ID", "SEED_USERS",
+	"PROVIDER_URL", "WEBHOOK_SECRET", "SEND_RATE_PER_SECOND", "SEND_WORKERS",
 }
 
 // Load reads settings from the process environment. Values from envFile are
@@ -59,7 +72,19 @@ func Load(envFile string) (Config, error) {
 	if err != nil || seedUsers < 0 {
 		return Config{}, fmt.Errorf("SEED_USERS must be a non-negative number")
 	}
+	sendRate, err := strconv.ParseFloat(get("SEND_RATE_PER_SECOND", "100"), 64)
+	if err != nil || sendRate <= 0 {
+		return Config{}, fmt.Errorf("SEND_RATE_PER_SECOND must be a positive number")
+	}
+	sendWorkers, err := strconv.Atoi(get("SEND_WORKERS", "40"))
+	if err != nil || sendWorkers <= 0 {
+		return Config{}, fmt.Errorf("SEND_WORKERS must be a positive number")
+	}
 	return Config{
+		ProviderURL:          get("PROVIDER_URL", "http://localhost:9090"),
+		WebhookSecret:        get("WEBHOOK_SECRET", DevWebhookSecret),
+		SendRate:             sendRate,
+		SendWorkers:          sendWorkers,
 		SeedUsers:            seedUsers,
 		Port:                 get("PORT", "8080"),
 		DatabaseURL:          get("DATABASE_URL", ""),

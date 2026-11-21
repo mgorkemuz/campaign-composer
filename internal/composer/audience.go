@@ -19,6 +19,21 @@ type Composer struct {
 	LLM   llm.Provider
 	Log   *slog.Logger
 	Retry llm.RetryPolicy
+	// OnCall, if set, is told about every model call (for metrics).
+	OnCall func(task, outcome string, usage llm.Usage)
+}
+
+func (c *Composer) report(task string, resp llm.Response, err error, valid bool) {
+	outcome := "ok"
+	switch {
+	case err != nil:
+		outcome = "error"
+	case !valid:
+		outcome = "invalid_output"
+	}
+	if c.OnCall != nil {
+		c.OnCall(task, outcome, resp.Usage)
+	}
 }
 
 func New(provider llm.Provider, log *slog.Logger) *Composer {
@@ -70,12 +85,14 @@ func (c *Composer) audience(ctx context.Context, prompt string) (Audience, error
 			MaxTokens: 4000,
 		}, nil, c.Retry)
 		if err != nil {
+			c.report(TaskAudience, resp, err, false)
 			return Audience{}, err
 		}
 		c.Log.Info("llm call", "task", TaskAudience, "model", resp.Model, "attempt", attempt,
 			"input_tokens", resp.Usage.InputTokens, "output_tokens", resp.Usage.OutputTokens)
 
 		aud, err := parseAudience(resp.Text)
+		c.report(TaskAudience, resp, nil, err == nil)
 		if err == nil {
 			aud.Attempts, aud.Model = attempt, resp.Model
 			return aud, nil

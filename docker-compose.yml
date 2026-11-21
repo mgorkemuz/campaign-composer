@@ -1,3 +1,6 @@
+# Local stack: Postgres, the app (API + workers), and the mock SMS/email provider.
+x-webhook-secret: &webhook-secret ${WEBHOOK_SECRET:-local-dev-webhook-secret}
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -19,8 +22,22 @@ services:
         required: false
     environment:
       DATABASE_URL: postgres://composer:composer@postgres:5432/composer?sslmode=disable
+      PROVIDER_URL: http://mockprovider:9090
+      WEBHOOK_SECRET: *webhook-secret
       LOG_FORMAT: json
     ports: ["8080:8080"]
     depends_on:
       postgres:
         condition: service_healthy
+
+  mockprovider:
+    build: .
+    entrypoint: ["/mockprovider"]
+    environment:
+      WEBHOOK_URL: http://server:8080/webhooks/provider
+      WEBHOOK_SECRET: *webhook-secret
+      # Misbehaviour knobs (defaults shown): MOCK_ERROR_RATE=0.05, MOCK_RATE_LIMIT_RATE=0.05,
+      # MOCK_DROP_RATE=0.01, MOCK_SLOW_RATE=0.02, MOCK_MAX_RPS=150, MOCK_LATENCY_MIN=50ms,
+      # MOCK_LATENCY_MAX=500ms, MOCK_RECEIPT_DELAY_MIN=500ms, MOCK_RECEIPT_DELAY_MAX=5s,
+      # MOCK_RECEIPT_DUPLICATE_RATE=0.05, MOCK_RECEIPT_EARLY_RATE=0.02, MOCK_DELIVERED_RATE=0.95
+    ports: ["9090:9090"]   # GET /stats shows what the provider saw

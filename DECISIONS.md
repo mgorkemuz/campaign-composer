@@ -126,6 +126,55 @@ What changed in the port, and why:
   is 10 (bytes), not 9. A test caught this through a wrong SMS length. Embedded databases are now created as
   UTF-8, the server refuses to start on any other encoding, and a test fails if a test database isn't UTF-8.
 
+## Sending
+
+- **Approval is one transaction.** It re-checks the messages against the audience as it is now ("within 30 days"
+  shifts with time). It inserts every delivery with `INSERT … SELECT` (consent filter per channel) and every send
+  job the same way, then moves the campaign to `sending`. It all commits together or not at all. A second approve
+  answers 409 and inserts nothing.
+- **Never twice: four independent layers.**
+  1. `UNIQUE (campaign_id, user_id, channel)` on deliveries.
+  2. One job per delivery under a unique dedup key.
+  3. A worker skips a delivery that is already finished.
+  4. An `Idempotency-Key` per delivery sent to the provider, which answers a repeat with its first result. Only
+     this covers "the provider accepted the message but its response was lost".
+
+  The chaos test proves it. A mutation that sends a fresh key per attempt makes it fail with deliveries accepted
+  twice.
+- **Retries.**
+  - 429, 5xx and network errors are retried with exponential backoff and jitter (1 s base, 60 s cap), or after
+    the provider's `Retry-After`, up to 6 attempts.
+  - Other 4xx (invalid number or email) fail at once.
+  - When the queue gives up, the delivery is marked `failed`.
+- **Rate limit:** a token bucket per channel (`golang.org/x/time/rate`), 100/s with a burst of 1, so the limit
+  also holds over short windows. Each channel has its own worker pool (40 workers, enough for ~100/s at the mock's
+  50–500 ms latency), and every send waits for its channel's limiter. The limiter is per process: with several app
+  replicas it would need to move to Postgres or Redis. A test checks that no one-second window exceeds the limit.
+- **Receipts by signed webhook.**
+  - The signature is HMAC-SHA256 over `timestamp.body`; requests older than 5 minutes are refused.
+  - Receipts are matched by our delivery ID (the provider echoes it as `reference`), because a receipt can arrive
+    before the worker has saved the provider's message ID.
+  - Status only moves forward. Duplicate and late receipts change nothing.
+  - A `delivered` receipt also overrides our own `failed`: we gave up, but the provider had accepted the message.
+  - Unknown or duplicate receipts get 200, so the provider stops retrying; database errors get 500, so it retries.
+- **Campaign completion:** `completed` once no delivery is queued, sending or retrying. Receipts may still arrive
+  afterwards and update deliveries.
+- **Live doorbells are throttled** to one per campaign every 250 ms, with a trailing ring, so thousands of status
+  changes cost a few notifications a second.
+- **Metrics on `/metrics`:**
+  - provider calls by status code, with latency;
+  - finished deliveries;
+  - webhooks by outcome;
+  - LLM calls and tokens by task;
+  - queue depth, read from the jobs table at scrape time.
+
+  The Docker run caught permanent failures being counted twice: both the handler and the queue's `OnFailed`
+  "succeeded" in marking the same row. Now the second update skips rows already failed, and the chaos test compares
+  the counter with the database.
+- **Mock provider:** a separate service (`cmd/mockprovider`), with every misbehaviour set by an environment
+  variable. In Docker, a 2,623-message campaign finished in about 24 s with 0 duplicates, and the 14 failures were
+  exactly the malformed contacts.
+
 ## Models
 
 `claude-haiku-5-5` is the default: the tasks are short and structured.

@@ -20,13 +20,28 @@ type Server struct {
 	hub  *events.Hub
 	now  func() time.Time
 
-	campaigns *campaign.Service
+	campaigns     *campaign.Service
+	webhookSecret string
+	metrics       Metrics
+	ring          func(topic string)
 
 	closing   chan struct{}
 	closeOnce sync.Once
 }
 
+// Metrics receives HTTP-side events; nil disables them.
+type Metrics interface {
+	Webhook(outcome string)
+	Handler() http.Handler
+}
+
 type Options struct {
+	// WebhookSecret verifies the provider's signed delivery receipts.
+	WebhookSecret string
+	Metrics       Metrics
+	// Ring wakes a campaign's live streams after a receipt; throttled in
+	// production (delivery.Sender.Ring). Default: an unthrottled doorbell.
+	Ring      func(topic string)
 	Hub       *events.Hub
 	Campaigns *campaign.Service
 	// Now is the clock for "within N days" rules; tests pin it. Default time.Now.
@@ -37,8 +52,15 @@ func New(pool *pgxpool.Pool, log *slog.Logger, opts Options) *Server {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Ring == nil {
+		opts.Ring = func(topic string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = events.Ring(ctx, pool, topic)
+		}
+	}
 	return &Server{pool: pool, log: log, hub: opts.Hub, now: opts.Now, campaigns: opts.Campaigns,
-		closing: make(chan struct{})}
+		webhookSecret: opts.WebhookSecret, metrics: opts.Metrics, ring: opts.Ring, closing: make(chan struct{})}
 }
 
 // CloseStreams ends open event streams. http.Server.Shutdown waits for active
@@ -68,6 +90,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/campaigns/{id}/content", s.handleStartContent)
 	mux.HandleFunc("PUT /api/campaigns/{id}/content", s.handleSetContent)
 	mux.HandleFunc("GET /api/campaigns/{id}/events", s.handleCampaignEvents)
+	mux.HandleFunc("POST /api/campaigns/{id}/approve", s.handleApprove)
+	mux.HandleFunc("GET /api/campaigns/{id}/deliveries", s.handleListDeliveries)
+	mux.HandleFunc("GET /api/campaigns/{id}/deliveries/counts", s.handleDeliveryCounts)
+
+	mux.HandleFunc("POST /webhooks/provider", s.handleReceipt)
+	if s.metrics != nil {
+		mux.Handle("GET /metrics", s.metrics.Handler())
+	}
 
 	// Unknown /api paths get a JSON 404.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

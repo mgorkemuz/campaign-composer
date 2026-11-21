@@ -54,6 +54,7 @@ func (c *Composer) GenerateContent(ctx context.Context, req ContentRequest,
 			MaxTokens: 4000,
 		}, fs.Write, c.Retry)
 		if err != nil {
+			c.report(TaskContent, resp, err, false)
 			return GeneratedContent{}, err
 		}
 		c.Log.Info("llm call", "task", TaskContent, "model", resp.Model, "attempt", attempt,
@@ -71,10 +72,12 @@ func (c *Composer) GenerateContent(ctx context.Context, req ContentRequest,
 				var chk message.Check
 				chk, problems = message.Validate(content, req.Longest)
 				if len(problems) == 0 {
+					c.report(TaskContent, resp, nil, true)
 					return GeneratedContent{Content: content, Check: chk, Attempts: attempt, Model: resp.Model}, nil
 				}
 			}
 		}
+		c.report(TaskContent, resp, nil, false)
 		userText = prompt + "\n\nYour previous answer was rejected:\n<previous_answer>\n" + resp.Text +
 			"\n</previous_answer>\n<problems>\n- " + strings.Join(problems, "\n- ") +
 			"\n</problems>\nReturn a corrected answer that fixes every problem."

@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"campaign-composer/internal/api"
+	"campaign-composer/internal/backoff"
 	"campaign-composer/internal/campaign"
 	"campaign-composer/internal/composer"
 	"campaign-composer/internal/config"
+	"campaign-composer/internal/delivery"
 	"campaign-composer/internal/events"
 	"campaign-composer/internal/llm"
+	"campaign-composer/internal/metrics"
 	"campaign-composer/internal/queue"
 	"campaign-composer/internal/seed"
 	"campaign-composer/internal/store"
@@ -62,8 +65,15 @@ func run() error {
 	hub := events.NewHub(pool, log)
 	go hub.Run(bgCtx)
 
+	if cfg.WebhookSecret == config.DevWebhookSecret {
+		log.Warn("WEBHOOK_SECRET is not set; using the development secret")
+	}
+	m := metrics.New(pool)
 	provider := newLLM(cfg)
-	campaigns := campaign.NewService(pool, composer.New(provider, log), time.Now)
+	comp := composer.New(provider, log)
+	comp.OnCall = func(task, outcome string, u llm.Usage) { m.LLMCall(task, outcome, u.InputTokens, u.OutputTokens) }
+	campaigns := campaign.NewService(pool, comp, time.Now)
+	sender := delivery.NewSender(pool, delivery.NewClient(cfg.ProviderURL), cfg.SendRate, log, m)
 
 	var workers sync.WaitGroup
 	contentWorker := &queue.Worker{
@@ -76,7 +86,23 @@ func run() error {
 	workers.Add(1)
 	go func() { defer workers.Done(); contentWorker.Run(bgCtx) }()
 
-	apiSrv := api.New(pool, log, api.Options{Hub: hub, Campaigns: campaigns})
+	// One worker pool per channel. Each send waits for its channel's rate
+	// limiter, so a pool never exceeds SendRate however many workers it has.
+	for _, ch := range delivery.Channels {
+		w := &queue.Worker{
+			Pool: pool, Hub: hub, Log: log, Kind: delivery.JobKind(ch),
+			Handler: sender.Handle, OnFailed: sender.OnFailed,
+			Concurrency: cfg.SendWorkers,
+			LeaseTTL:    30 * time.Second,
+			Backoff:     backoff.Policy{Base: time.Second, Max: time.Minute},
+		}
+		workers.Add(1)
+		go func() { defer workers.Done(); w.Run(bgCtx) }()
+	}
+
+	apiSrv := api.New(pool, log, api.Options{
+		Hub: hub, Campaigns: campaigns, WebhookSecret: cfg.WebhookSecret, Metrics: m, Ring: sender.Ring,
+	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           apiSrv.Handler(),
@@ -84,7 +110,8 @@ func run() error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "port", cfg.Port, "llm", provider.Name())
+		log.Info("listening", "port", cfg.Port, "llm", provider.Name(), "provider", cfg.ProviderURL,
+			"send_rate_per_channel", cfg.SendRate)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}

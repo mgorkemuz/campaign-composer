@@ -33,7 +33,17 @@ func Open(ctx context.Context, databaseURL, dataDir string, log *slog.Logger) (*
 		databaseURL, stopEmbedded = url, stop
 	}
 
-	pool, err := pgxpool.New(ctx, databaseURL)
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		stopEmbedded()
+		return nil, nil, fmt.Errorf("parse database URL: %w", err)
+	}
+	// The default (one connection per CPU) is too small for the send workers;
+	// a pool_max_conns in the URL still wins.
+	if !strings.Contains(databaseURL, "pool_max_conns") {
+		cfg.MaxConns = 25
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		stopEmbedded()
 		return nil, nil, fmt.Errorf("connect to postgres: %w", err)

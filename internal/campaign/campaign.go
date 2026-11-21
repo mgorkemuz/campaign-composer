@@ -83,13 +83,16 @@ type Service struct {
 	now      func() time.Time
 	// LLMTimeout bounds one generation, including retries and the repair round.
 	LLMTimeout time.Duration
+	// DeliveryMaxAttempts is how many times one message is tried.
+	DeliveryMaxAttempts int
 }
 
 func NewService(pool *pgxpool.Pool, c *composer.Composer, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{pool: pool, composer: c, now: now, LLMTimeout: 2 * time.Minute}
+	return &Service{pool: pool, composer: c, now: now, LLMTimeout: 2 * time.Minute,
+		DeliveryMaxAttempts: DefaultDeliveryMaxAttempts}
 }
 
 func (s *Service) Create(ctx context.Context, brief string) (Campaign, error) {
