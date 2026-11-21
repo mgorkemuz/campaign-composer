@@ -21,7 +21,8 @@ var keepAliveEvery = 15 * time.Second
 // It first replays stored events after Last-Event-ID (sent by the browser when
 // it reconnects) or ?after=, then waits for new ones. Stored and live events come
 // from the same query, so nothing falls in between. Streamed text arrives as
-// "delta" events, which are not stored. When finished reports true after a
+// "delta" events, which are not stored: a JSON object as the producer wrote it
+// (e.g. {"field":"sms","text":"..."}), or {"text":...} for plain text. When finished reports true after a
 // read, the stream sends "end" so the browser does not reconnect.
 func (s *Server) streamTopic(w http.ResponseWriter, r *http.Request, topic string,
 	finished func(ctx context.Context) (bool, error)) {
@@ -81,7 +82,10 @@ func (s *Server) streamTopic(w http.ResponseWriter, r *http.Request, topic strin
 				if sig.Delta == "" {
 					break wait
 				}
-				data, _ := json.Marshal(map[string]string{"text": sig.Delta})
+				data := []byte(sig.Delta)
+				if !json.Valid(data) || data[0] != '{' {
+					data, _ = json.Marshal(map[string]string{"text": sig.Delta})
+				}
 				fmt.Fprintf(w, "event: delta\ndata: %s\n\n", data)
 				rc.Flush()
 			}

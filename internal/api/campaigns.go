@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"campaign-composer/internal/campaign"
 	"campaign-composer/internal/composer"
 	"campaign-composer/internal/llm"
+	"campaign-composer/internal/message"
 	"campaign-composer/internal/segment"
 )
 
@@ -105,6 +107,8 @@ func (s *Server) writeAudience(w http.ResponseWriter, r *http.Request, res campa
 		s.log.Error("llm rejected the request", "status", se.StatusCode, "error", err)
 		writeError(w, http.StatusBadGateway, "llm_rejected",
 			"the AI service rejected the request; check the server's Anthropic API key, workspace and billing")
+	case errors.Is(err, campaign.ErrGenerating):
+		writeError(w, http.StatusConflict, "generating", err.Error())
 	case errors.Is(err, campaign.ErrWrongStatus):
 		writeError(w, http.StatusConflict, "wrong_status", err.Error())
 	default:
@@ -122,4 +126,68 @@ func writeProblems(w http.ResponseWriter, status int, code, message string, prob
 	}
 	body.Error.Code, body.Error.Message, body.Error.Problems = code, message, problems
 	writeJSON(w, status, body)
+}
+
+// handleStartContent queues message generation and answers 202 at once. The
+// text streams to GET /api/campaigns/{id}/events.
+func (s *Server) handleStartContent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Language    string `json:"language"`
+		Instruction string `json:"instruction"`
+	}
+	if r.ContentLength != 0 && !decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.Instruction) > 500 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "instruction must be at most 500 characters")
+		return
+	}
+	c, err := s.campaigns.StartContent(r.Context(), r.PathValue("id"), req.Language, req.Instruction)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusAccepted, c)
+	case errors.Is(err, campaign.ErrBadLanguage):
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, campaign.ErrWrongStatus):
+		writeError(w, http.StatusConflict, "wrong_status", "generate the audience first; messages can change only before approval")
+	default:
+		s.storeError(w, r, err, "campaign")
+	}
+}
+
+// handleSetContent saves messages written or edited by the marketer.
+func (s *Server) handleSetContent(w http.ResponseWriter, r *http.Request) {
+	var req message.Content
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	c, err := s.campaigns.SetContent(r.Context(), r.PathValue("id"), req)
+	var ce *campaign.ContentError
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, c)
+	case errors.As(err, &ce):
+		writeProblems(w, http.StatusUnprocessableEntity, "invalid_content", "the messages are not valid", ce.Problems)
+	case errors.Is(err, campaign.ErrWrongStatus):
+		writeError(w, http.StatusConflict, "wrong_status", err.Error())
+	default:
+		s.storeError(w, r, err, "campaign")
+	}
+}
+
+// handleCampaignEvents streams a campaign's events (status changes, message
+// text as it is written, later delivery progress) with server-sent events.
+func (s *Server) handleCampaignEvents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.campaigns.Get(r.Context(), id); err != nil {
+		s.storeError(w, r, err, "campaign")
+		return
+	}
+	s.streamTopic(w, r, campaign.Topic(id), func(ctx context.Context) (bool, error) {
+		c, err := s.campaigns.Get(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		return c.Status == campaign.StatusCompleted || c.Status == campaign.StatusFailed, nil
+	})
 }

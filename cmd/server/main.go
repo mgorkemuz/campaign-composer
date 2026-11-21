@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"campaign-composer/internal/config"
 	"campaign-composer/internal/events"
 	"campaign-composer/internal/llm"
+	"campaign-composer/internal/queue"
 	"campaign-composer/internal/seed"
 	"campaign-composer/internal/store"
 )
@@ -63,6 +65,17 @@ func run() error {
 	provider := newLLM(cfg)
 	campaigns := campaign.NewService(pool, composer.New(provider, log), time.Now)
 
+	var workers sync.WaitGroup
+	contentWorker := &queue.Worker{
+		Pool: pool, Hub: hub, Log: log, Kind: campaign.JobGenerateContent,
+		Handler: campaigns.HandleContentJob, OnFailed: campaigns.OnContentJobFailed,
+		Concurrency: 4,
+		// A generation streams for several seconds and may run a repair round.
+		LeaseTTL: 3 * time.Minute,
+	}
+	workers.Add(1)
+	go func() { defer workers.Done(); contentWorker.Run(bgCtx) }()
+
 	apiSrv := api.New(pool, log, api.Options{Hub: hub, Campaigns: campaigns})
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -90,6 +103,7 @@ func run() error {
 		log.Error("http shutdown", "error", err)
 	}
 	stopBg()
+	workers.Wait() // jobs in progress finish (each bounded by its lease)
 	return nil
 }
 

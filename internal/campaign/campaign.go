@@ -15,6 +15,7 @@ import (
 
 	"campaign-composer/internal/composer"
 	"campaign-composer/internal/events"
+	"campaign-composer/internal/message"
 	"campaign-composer/internal/segment"
 	"campaign-composer/internal/store"
 )
@@ -30,7 +31,16 @@ const (
 )
 
 // audienceEditable are the statuses in which the audience may still change.
-var audienceEditable = []string{StatusDraft, StatusAudienceReady}
+var audienceEditable = []string{StatusDraft, StatusAudienceReady, StatusContentReady}
+
+// Content states (see migration 0004).
+const (
+	ContentNone       = "none"
+	ContentGenerating = "generating"
+	ContentReady      = "ready"
+	ContentFailed     = "failed"
+	ContentInvalid    = "invalid"
+)
 
 const MaxBriefLength = 2000
 
@@ -45,8 +55,17 @@ type Campaign struct {
 	SMSReachable        *int          `json:"sms_reachable"`
 	EmailReachable      *int          `json:"email_reachable"`
 	LLMModel            string        `json:"llm_model"`
-	CreatedAt           time.Time     `json:"created_at"`
-	UpdatedAt           time.Time     `json:"updated_at"`
+
+	Language     *string         `json:"language"`
+	SMS          string          `json:"sms"`
+	EmailSubject string          `json:"email_subject"`
+	EmailBody    string          `json:"email_body"`
+	ContentState string          `json:"content_state"`
+	ContentError json.RawMessage `json:"content_error"`
+	ContentCheck *message.Check  `json:"content_check"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Topic is the event stream of one campaign.
@@ -90,7 +109,9 @@ func (s *Service) Create(ctx context.Context, brief string) (Campaign, error) {
 
 const selectCampaign = `
 	SELECT id::text, brief, status, rule, audience_summary, audience_assumptions,
-	       audience_total, sms_reachable, email_reachable, llm_model, created_at, updated_at
+	       audience_total, sms_reachable, email_reachable, llm_model,
+	       language, sms_body, email_subject, email_body, content_state, content_error, content_check,
+	       created_at, updated_at
 	FROM campaigns`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -99,7 +120,9 @@ func scan(row scanner) (Campaign, error) {
 	var c Campaign
 	var rule []byte
 	err := row.Scan(&c.ID, &c.Brief, &c.Status, &rule, &c.AudienceSummary, &c.AudienceAssumptions,
-		&c.AudienceTotal, &c.SMSReachable, &c.EmailReachable, &c.LLMModel, &c.CreatedAt, &c.UpdatedAt)
+		&c.AudienceTotal, &c.SMSReachable, &c.EmailReachable, &c.LLMModel,
+		&c.Language, &c.SMS, &c.EmailSubject, &c.EmailBody, &c.ContentState, &c.ContentError, &c.ContentCheck,
+		&c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return Campaign{}, store.MapErr(err)
 	}

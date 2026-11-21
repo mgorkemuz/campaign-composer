@@ -104,12 +104,35 @@ What changed in the port, and why:
 - **The brief sits in `<brief>` tags,** and the prompt treats it as a description of the campaign, not as
   instructions.
 
+## Messages
+
+- **One language per campaign**, `tr` or `en`. By default the model uses the brief's language. If the marketer
+  picks one, the schema's `language` enum is narrowed to it, so the model cannot answer in another.
+- **Limits are checked after personalization against this audience,** not the template alone. The backend reads
+  the longest first name, last name and city among the matched users and renders the worst case. An SMS that fits
+  for "Ankara" can be too long for "Eskişehir". Changing the audience re-checks existing messages: they become
+  `invalid` (with the reason) or stay `ready`, without being rewritten.
+- **SMS encoding is reported, not enforced.** The requirement is ≤ 160 characters. Turkish letters (ş, ğ, ı, İ)
+  switch an SMS to UCS-2, where one part holds 70 characters, so a 149-character Turkish SMS goes out as 3 parts.
+  The check shows encoding and part count so the marketer can decide.
+- **Generation is a queue job, not part of the HTTP request.** The request answers 202 at once. Text streams to
+  the campaign's SSE stream as field deltas (`{"attempt","field","text"}`), extracted from Claude's partial JSON
+  by a streaming parser. A page refresh or server restart doesn't lose the result, and temporary LLM errors are
+  retried by the queue.
+- **Newest wins.** Every generation request or hand edit bumps `content_version`, and a job saves only if the
+  version is still its own. While a generation runs, the audience is locked (409 `generating`).
+- **Hand edits pass the same checks** as generated messages (`PUT /content`, 422 with every problem).
+- **The database must be UTF-8.** Embedded Postgres defaulted to `SQL_ASCII`, where `char_length('Eskişehir')`
+  is 10 (bytes), not 9. A test caught this through a wrong SMS length. Embedded databases are now created as
+  UTF-8, the server refuses to start on any other encoding, and a test fails if a test database isn't UTF-8.
+
 ## Models
 
 `claude-haiku-5-5` is the default: the tasks are short and structured.
 
-**Measured on real calls:** an audience generation takes about 1,850 input and 230–310 output tokens (about
-$0.0003) and 2.5–4 s. It produced the expected rule for the example brief and for a Turkish brief, and refine
+**Measured on real calls:** an audience generation takes about 1,850 input and 230–550 output tokens (about
+$0.0003) and 2.5–4 s. Message generation takes about 800 input and 400–540 output tokens (about $0.0003); the
+first text appears after 1.5–3.5 s, and it's done in 3–4 s. It produced the expected rule for the example brief and for a Turkish brief, and refine
 edited the existing rule instead of rebuilding it. `ANTHROPIC_MODEL` switches it. Structured outputs can't express length limits, so the
 backend validates SMS (≤ 160) and subject (≤ 80) itself.
 

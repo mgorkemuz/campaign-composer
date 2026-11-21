@@ -101,37 +101,3 @@ func TestHubDeliversDoorbellsAndDeltas(t *testing.T) {
 	default:
 	}
 }
-
-func TestDeltaBufferBatches(t *testing.T) {
-	pool := testdb.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	hub := events.NewHub(pool, quiet)
-	go hub.Run(ctx)
-	<-hub.Ready()
-	sub := hub.Subscribe("t")
-	defer hub.Unsubscribe(sub)
-
-	buf := events.NewDeltaBuffer(pool, "t")
-	words := []string{"Merhaba ", "{{first_name}}", ", sepetin ", "seni bekliyor!"}
-	for _, w := range words {
-		buf.Add(w)
-	}
-	buf.Flush()
-
-	var got []string
-	timeout := time.After(3 * time.Second)
-	for strings.Join(got, "") != strings.Join(words, "") {
-		select {
-		case sig := <-sub.C:
-			if sig.Delta != "" {
-				got = append(got, sig.Delta)
-			}
-		case <-timeout:
-			t.Fatalf("got %q", strings.Join(got, ""))
-		}
-	}
-	if len(got) >= len(words) {
-		t.Errorf("expected batching into fewer than %d notifications, got %d", len(words), len(got))
-	}
-}

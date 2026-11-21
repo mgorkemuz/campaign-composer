@@ -30,6 +30,9 @@ func (m *Mock) Generate(ctx context.Context, req llm.Request, onText func(string
 	case TaskAudience:
 		last := req.Messages[len(req.Messages)-1].Text
 		text = mockAudience(tagged(last, "brief") + "\n" + tagged(last, "instruction"))
+	case TaskContent:
+		last := req.Messages[len(req.Messages)-1].Text
+		text = mockContent(tagged(last, "brief"), tagged(last, "language"))
 	default:
 		return llm.Response{}, fmt.Errorf("mock LLM: unknown task %q", req.Task)
 	}
@@ -147,3 +150,63 @@ var turkishFold = strings.NewReplacer(
 )
 
 func foldText(s string) string { return strings.ToLower(turkishFold.Replace(s)) }
+
+var (
+	discountRe   = regexp.MustCompile(`%\s?(\d{1,2})|(\d{1,2})\s?%`)
+	turkishWords = []string{" ve ", " bir ", " için ", "müşteri", "kullanıcı", "gönder", "son "}
+)
+
+// mockContent writes simple, valid messages from a few keywords in the brief.
+func mockContent(brief, language string) string {
+	lower := strings.ToLower(brief)
+	if language == "" {
+		language = "en"
+		if strings.ContainsAny(brief, "çğıİöşüÇĞÖŞÜ") || containsAny(" "+lower+" ", turkishWords) {
+			language = "tr"
+		}
+	}
+	discount := ""
+	if m := discountRe.FindStringSubmatch(brief); m != nil {
+		discount = m[1] + m[2]
+	}
+	cart := containsAny(lower, cartWords)
+
+	var sms, subject, body string
+	if language == "tr" {
+		offer := "sana özel bir sürprizimiz var"
+		if discount != "" {
+			offer = "%" + discount + " indirim seni bekliyor"
+		}
+		if cart {
+			sms = "Merhaba {{first_name}}, sepetindeki ürünler hâlâ seni bekliyor ve " + offer + "! Alışverişini bugün tamamla."
+			subject = "{{first_name}}, sepetin seni bekliyor"
+			body = "Merhaba {{first_name}},\n\nSepetine eklediğin ürünler hâlâ seni bekliyor. Üstelik " + offer + ".\n\nAlışverişini tamamlamak için uygulamaya göz atman yeterli.\n\nSevgiler,\nEkip"
+		} else {
+			sms = "Merhaba {{first_name}}, " + offer + "! Detaylar için uygulamaya göz at."
+			subject = "{{first_name}}, " + offer
+			body = "Merhaba {{first_name}},\n\nBizi tercih ettiğin için teşekkür ederiz. Bu yüzden " + offer + ".\n\nDetaylar için uygulamaya göz atabilirsin.\n\nSevgiler,\nEkip"
+		}
+	} else {
+		offer := "we have a little surprise for you"
+		if discount != "" {
+			offer = discount + "% off is waiting for you"
+		}
+		if cart {
+			sms = "Hi {{first_name}}, the items in your cart are still waiting and " + offer + "! Finish your order today."
+			subject = "{{first_name}}, your cart is waiting"
+			body = "Hi {{first_name}},\n\nThe items you added to your cart are still waiting for you. And " + offer + ".\n\nOpen the app to finish your order.\n\nBest,\nThe team"
+		} else {
+			sms = "Hi {{first_name}}, " + offer + "! Open the app for the details."
+			subject = "{{first_name}}, " + offer
+			body = "Hi {{first_name}},\n\nThank you for shopping with us. That is why " + offer + ".\n\nOpen the app for the details.\n\nBest,\nThe team"
+		}
+	}
+	// A struct, not a map, so fields stream in the same order as Claude's.
+	out, _ := json.Marshal(struct {
+		Language     string `json:"language"`
+		SMS          string `json:"sms"`
+		EmailSubject string `json:"email_subject"`
+		EmailBody    string `json:"email_body"`
+	}{language, sms, subject, body})
+	return string(out)
+}

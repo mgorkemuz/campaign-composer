@@ -103,6 +103,10 @@ func server() (string, error) {
 		Username("postgres").
 		Password(password).
 		Database("postgres").
+		// Without these, initdb picks SQL_ASCII from the environment, and
+		// char_length() then counts bytes instead of characters.
+		Encoding("UTF8").
+		Locale("C").
 		RuntimePath(filepath.Join(dir, "runtime")).
 		DataPath(filepath.Join(dir, "data")).
 		BinariesPath(binDir).

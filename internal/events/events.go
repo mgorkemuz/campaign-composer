@@ -3,8 +3,6 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -92,47 +90,4 @@ func notify(ctx context.Context, db store.DBTX, topic, delta string) error {
 	payload, _ := json.Marshal(map[string]string{"topic": topic, "delta": delta})
 	_, err := db.Exec(ctx, `SELECT pg_notify($1, $2)`, store.NotifyChannel, string(payload))
 	return store.MapErr(err)
-}
-
-// DeltaBuffer batches streamed text into fewer notifications: it flushes every
-// 100 ms or 1 KB. Ported from agents-platform's runner.
-type DeltaBuffer struct {
-	db    store.DBTX
-	topic string
-
-	mu   sync.Mutex
-	buf  strings.Builder
-	last time.Time
-}
-
-func NewDeltaBuffer(db store.DBTX, topic string) *DeltaBuffer {
-	return &DeltaBuffer{db: db, topic: topic, last: time.Now()}
-}
-
-func (d *DeltaBuffer) Add(s string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.buf.WriteString(s)
-	if d.buf.Len() >= 1000 || time.Since(d.last) > 100*time.Millisecond {
-		d.flushLocked()
-	}
-}
-
-// Flush sends whatever is buffered. Call it when the stream ends.
-func (d *DeltaBuffer) Flush() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.flushLocked()
-}
-
-func (d *DeltaBuffer) flushLocked() {
-	text := d.buf.String()
-	d.buf.Reset()
-	d.last = time.Now()
-	if text == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = Delta(ctx, d.db, d.topic, text) // best effort: the final text is stored anyway
 }

@@ -65,6 +65,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/campaigns/{id}/audience", s.handleGenerateAudience)
 	mux.HandleFunc("POST /api/campaigns/{id}/audience/refine", s.handleRefineAudience)
 	mux.HandleFunc("PUT /api/campaigns/{id}/audience", s.handleSetRule)
+	mux.HandleFunc("POST /api/campaigns/{id}/content", s.handleStartContent)
+	mux.HandleFunc("PUT /api/campaigns/{id}/content", s.handleSetContent)
+	mux.HandleFunc("GET /api/campaigns/{id}/events", s.handleCampaignEvents)
 
 	// Unknown /api paths get a JSON 404.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

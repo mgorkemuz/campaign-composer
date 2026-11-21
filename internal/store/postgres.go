@@ -45,7 +45,28 @@ func Open(ctx context.Context, databaseURL, dataDir string, log *slog.Logger) (*
 		stopEmbedded()
 		return nil, nil, fmt.Errorf("ping postgres: %w", err)
 	}
+	if err := checkEncoding(pingCtx, pool); err != nil {
+		pool.Close()
+		stopEmbedded()
+		return nil, nil, err
+	}
 	return pool, func() { pool.Close(); stopEmbedded() }, nil
+}
+
+// checkEncoding refuses a database that is not UTF-8. In SQL_ASCII, Postgres's
+// character functions count bytes, so "Eskişehir" would be 10 characters long
+// and SMS length checks would be wrong for Turkish text.
+func checkEncoding(ctx context.Context, pool *pgxpool.Pool) error {
+	var enc string
+	if err := pool.QueryRow(ctx,
+		`SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname = current_database()`).Scan(&enc); err != nil {
+		return fmt.Errorf("read database encoding: %w", err)
+	}
+	if enc != "UTF8" {
+		return fmt.Errorf("the database encoding is %s, but UTF8 is required "+
+			"(for the embedded database, delete %s to re-create it)", enc, filepath.Join("DATA_DIR", "pg"))
+	}
+	return nil
 }
 
 func startEmbedded(dataDir string, log *slog.Logger) (string, func(), error) {
@@ -71,6 +92,8 @@ func startEmbedded(dataDir string, log *slog.Logger) (string, func(), error) {
 		Username("composer").
 		Password(password).
 		Database("composer").
+		Encoding("UTF8"). // see checkEncoding
+		Locale("C").
 		DataPath(filepath.Join(base, "data")).
 		RuntimePath(filepath.Join(base, "runtime")).
 		BinariesPath(filepath.Join(base, "bin")).
